@@ -9,10 +9,10 @@ try:
 except Exception:
     yf = None
 
-st.set_page_config(page_title="Enterprise Valuation Lab V11", page_icon="🏛️", layout="wide")
+st.set_page_config(page_title="Enterprise Valuation Lab V12", page_icon="🏛️", layout="wide")
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("V11｜Company State Machine Engine")
-st.info("V11 重點：先判斷公司目前所處狀態，再決定採用模型。不是每家公司、每個週期都用同一套估值方法。")
+st.subheader("V12｜V10 + V11 Hybrid Engine")
+st.info("V12 架構：V10 負責估值，V11 負責判斷公司情境與模型排序；情境只做保守微調，不直接大幅拉高估值。")
 
 @st.cache_data(ttl=900)
 def fetch_price(symbol, fallback=None):
@@ -23,6 +23,7 @@ def fetch_price(symbol, fallback=None):
         candidates.append(base + (".TWO" if symbol.endswith(".TW") else ".TW"))
     else:
         candidates += [symbol + ".TW", symbol + ".TWO"]
+
     if yf is not None:
         for ticker in candidates:
             try:
@@ -37,33 +38,31 @@ def fetch_price(symbol, fallback=None):
                     return float(price), f"yfinance：{ticker}"
             except Exception:
                 pass
+
     if fallback is not None:
         return float(fallback), "fallback 備援價"
     return None, "抓不到現價"
 
 def classify_state(x):
-    rev = x["Revenue_CAGR"]
-    eps = x["EPS_CAGR"]
-    roe = x["ROE"]
-    roic = x["ROIC"]
-    fcf_margin = x["FCF_Margin"]
-    pb = x["PB"]
-    pe = x["PE"]
+    rev, eps = x["Revenue_CAGR"], x["EPS_CAGR"]
+    roe, roic = x["ROE"], x["ROIC"]
+    fcf = x["FCF_Margin"]
+    pb, pe = x["PB"], x["PE"]
     cycle = x["Cycle_Score"]
-    ai = x["VDF_Exposure"]
+    vdf = x["VDF_Exposure"]
     debt = x["Debt_Ratio"]
 
     if cycle <= 25 and pb <= 1.2:
         return "Cycle Bottom / Asset Recovery"
     if cycle >= 80 and rev >= 20 and eps >= 25:
         return "Super Cycle Growth"
-    if ai >= 70 and rev >= 15:
+    if vdf >= 70 and rev >= 15:
         return "VDF Re-rating"
     if rev >= 30 or eps >= 35:
         return "Hyper Growth"
-    if roic >= 25 and roe >= 25 and fcf_margin >= 15:
+    if roic >= 25 and roe >= 25 and fcf >= 15:
         return "Quality Compounder"
-    if debt <= 30 and fcf_margin >= 10 and roe >= 12:
+    if debt <= 30 and fcf >= 10 and roe >= 12:
         return "Stable Cash Flow"
     if pe <= 12 and pb <= 1.5:
         return "Value / Mean Reversion"
@@ -80,36 +79,66 @@ STATE_MODEL_MAP = {
     "Normal Operating": ["DCF-FCFF", "PE", "PB-ROE"],
 }
 
-STATE_PREMIUM = {
-    "Hyper Growth": 0.16,
-    "Quality Compounder": 0.10,
-    "VDF Re-rating": 0.14,
-    "Cycle Bottom / Asset Recovery": -0.05,
-    "Super Cycle Growth": 0.20,
-    "Stable Cash Flow": 0.05,
-    "Value / Mean Reversion": 0.02,
+# V12: conservative state adjustment, not aggressive valuation override
+STATE_ADJUSTMENT = {
+    "Hyper Growth": 0.03,
+    "Quality Compounder": 0.02,
+    "VDF Re-rating": 0.025,
+    "Cycle Bottom / Asset Recovery": -0.02,
+    "Super Cycle Growth": 0.035,
+    "Stable Cash Flow": 0.01,
+    "Value / Mean Reversion": 0.00,
     "Normal Operating": 0.00,
 }
 
-def state_valuation(price, x, state):
-    premium = STATE_PREMIUM[state]
-    quality_adj = ((x["ROIC"] + x["ROE"] + x["FCF_Margin"]) / 3 - 15) / 200
-    risk_adj = -max(0, x["Debt_Ratio"] - 50) / 300
-    base = price * (1 + premium + quality_adj + risk_adj)
+def v10_base(price, x):
+    # V10 valuation core: value drivers, not state premium
+    growth_score = min(100, 50 + x["Revenue_CAGR"] * 2.2 + x["EPS_CAGR"] * 1.2)
+    quality_score = min(100, 50 + x["ROIC"] * 1.3 + x["ROE"] * 0.8 + x["FCF_Margin"] * 0.7)
+    cap_score = min(100, 45 + x["VDF_Exposure"] * 0.35 + x["Cycle_Score"] * 0.15)
+    multiple_score = min(100, 50 + max(0, x["PE"] - 15) * 0.35 + max(0, x["PB"] - 1.5) * 1.0)
 
-    if "Cycle" in state:
-        width = 0.32
-    elif state in ["Hyper Growth", "Super Cycle Growth", "VDF Re-rating"]:
+    driver_score = (
+        growth_score * 0.25 +
+        quality_score * 0.25 +
+        cap_score * 0.25 +
+        multiple_score * 0.25
+    )
+
+    # Keep V10 core within controlled range
+    premium = (driver_score - 70) / 450
+    risk_adj = -max(0, x["Debt_Ratio"] - 50) / 600
+    return price * (1 + premium + risk_adj), {
+        "Growth Score": round(growth_score, 1),
+        "Quality Score": round(quality_score, 1),
+        "CAP/VDF Score": round(cap_score, 1),
+        "Multiple Score": round(multiple_score, 1),
+        "Driver Score": round(driver_score, 1),
+    }
+
+def hybrid_valuation(price, x):
+    state = classify_state(x)
+    base10, scores = v10_base(price, x)
+    adjustment = STATE_ADJUSTMENT[state]
+    hybrid_base = base10 * (1 + adjustment)
+
+    # width based on state uncertainty
+    if state in ["Super Cycle Growth", "Hyper Growth", "Cycle Bottom / Asset Recovery"]:
         width = 0.28
-    elif state == "Quality Compounder":
-        width = 0.20
+    elif state in ["VDF Re-rating", "Quality Compounder"]:
+        width = 0.22
     else:
-        width = 0.24
+        width = 0.20
 
     return {
-        "bear": round(base * (1 - width), 2),
-        "base": round(base, 2),
-        "bull": round(base * (1 + width), 2),
+        "state": state,
+        "models": STATE_MODEL_MAP[state],
+        "v10_base": round(base10, 2),
+        "state_adjustment": adjustment,
+        "base": round(hybrid_base, 2),
+        "bear": round(hybrid_base * (1 - width), 2),
+        "bull": round(hybrid_base * (1 + width), 2),
+        "scores": scores,
     }
 
 def status(err, tol=15):
@@ -120,134 +149,141 @@ def status(err, tol=15):
     return "FAIL"
 
 companies = {
-    "2330 台積電": {"symbol":"2330.TW","fallback":2370,"industry":"Semiconductor","f":{"Revenue_CAGR":18,"EPS_CAGR":22,"ROE":31,"ROIC":32,"FCF_Margin":22,"PB":8.5,"PE":28,"Cycle_Score":72,"VDF_Exposure":85,"Debt_Ratio":22}},
-    "2454 聯發科": {"symbol":"2454.TW","fallback":3910,"industry":"AI Platform","f":{"Revenue_CAGR":15,"EPS_CAGR":18,"ROE":25,"ROIC":24,"FCF_Margin":20,"PB":7.2,"PE":32,"Cycle_Score":70,"VDF_Exposure":82,"Debt_Ratio":18}},
-    "2383 台光電": {"symbol":"2383.TW","fallback":5450,"industry":"Advanced Materials","f":{"Revenue_CAGR":28,"EPS_CAGR":35,"ROE":32,"ROIC":30,"FCF_Margin":18,"PB":9.5,"PE":36,"Cycle_Score":86,"VDF_Exposure":88,"Debt_Ratio":25}},
-    "6215 和椿": {"symbol":"6215.TWO","fallback":100.5,"industry":"Intelligent Automation","f":{"Revenue_CAGR":18,"EPS_CAGR":20,"ROE":12,"ROIC":14,"FCF_Margin":8,"PB":2.8,"PE":35,"Cycle_Score":65,"VDF_Exposure":72,"Debt_Ratio":28}},
-    "2049 上銀": {"symbol":"2049.TW","fallback":318.5,"industry":"Intelligent Automation","f":{"Revenue_CAGR":9,"EPS_CAGR":8,"ROE":10,"ROIC":12,"FCF_Margin":10,"PB":2.5,"PE":30,"Cycle_Score":55,"VDF_Exposure":55,"Debt_Ratio":32}},
-    "2408 南亞科": {"symbol":"2408.TW","fallback":95,"industry":"Memory","f":{"Revenue_CAGR":35,"EPS_CAGR":45,"ROE":8,"ROIC":7,"FCF_Margin":-3,"PB":1.6,"PE":80,"Cycle_Score":88,"VDF_Exposure":45,"Debt_Ratio":35}},
-    "2303 聯電": {"symbol":"2303.TW","fallback":164,"industry":"Foundry","f":{"Revenue_CAGR":6,"EPS_CAGR":8,"ROE":14,"ROIC":13,"FCF_Margin":15,"PB":2.2,"PE":18,"Cycle_Score":58,"VDF_Exposure":35,"Debt_Ratio":25}},
-    "2881 富邦金": {"symbol":"2881.TW","fallback":128.5,"industry":"Financial","f":{"Revenue_CAGR":8,"EPS_CAGR":12,"ROE":14,"ROIC":10,"FCF_Margin":8,"PB":1.6,"PE":14,"Cycle_Score":55,"VDF_Exposure":5,"Debt_Ratio":65}},
-    "2891 中信金": {"symbol":"2891.TW","fallback":70.3,"industry":"Financial","f":{"Revenue_CAGR":6,"EPS_CAGR":9,"ROE":13,"ROIC":9,"FCF_Margin":7,"PB":1.5,"PE":13,"Cycle_Score":52,"VDF_Exposure":5,"Debt_Ratio":60}},
+    "2330 台積電": {"symbol":"2330.TW","fallback":2370,"industry":"Semiconductor","f":{"Revenue_CAGR":18,"EPS_CAGR":22,"ROIC":32,"ROE":31,"FCF_Margin":22,"PB":8.5,"PE":28,"Cycle_Score":72,"VDF_Exposure":85,"Debt_Ratio":22}},
+    "2454 聯發科": {"symbol":"2454.TW","fallback":3910,"industry":"AI Platform","f":{"Revenue_CAGR":15,"EPS_CAGR":18,"ROIC":24,"ROE":25,"FCF_Margin":20,"PB":7.2,"PE":32,"Cycle_Score":70,"VDF_Exposure":82,"Debt_Ratio":18}},
+    "2383 台光電": {"symbol":"2383.TW","fallback":5450,"industry":"Advanced Materials","f":{"Revenue_CAGR":28,"EPS_CAGR":35,"ROIC":30,"ROE":32,"FCF_Margin":18,"PB":9.5,"PE":36,"Cycle_Score":86,"VDF_Exposure":88,"Debt_Ratio":25}},
+    "6215 和椿": {"symbol":"6215.TWO","fallback":100.5,"industry":"Intelligent Automation","f":{"Revenue_CAGR":18,"EPS_CAGR":20,"ROIC":14,"ROE":12,"FCF_Margin":8,"PB":2.8,"PE":35,"Cycle_Score":65,"VDF_Exposure":72,"Debt_Ratio":28}},
+    "2049 上銀": {"symbol":"2049.TW","fallback":318.5,"industry":"Intelligent Automation","f":{"Revenue_CAGR":9,"EPS_CAGR":8,"ROIC":12,"ROE":10,"FCF_Margin":10,"PB":2.5,"PE":30,"Cycle_Score":55,"VDF_Exposure":55,"Debt_Ratio":32}},
+    "2408 南亞科": {"symbol":"2408.TW","fallback":95,"industry":"Memory","f":{"Revenue_CAGR":35,"EPS_CAGR":45,"ROIC":7,"ROE":8,"FCF_Margin":-3,"PB":1.6,"PE":80,"Cycle_Score":88,"VDF_Exposure":45,"Debt_Ratio":35}},
+    "2303 聯電": {"symbol":"2303.TW","fallback":164,"industry":"Foundry","f":{"Revenue_CAGR":6,"EPS_CAGR":8,"ROIC":13,"ROE":14,"FCF_Margin":15,"PB":2.2,"PE":18,"Cycle_Score":58,"VDF_Exposure":35,"Debt_Ratio":25}},
+    "2881 富邦金": {"symbol":"2881.TW","fallback":128.5,"industry":"Financial","f":{"Revenue_CAGR":8,"EPS_CAGR":12,"ROIC":10,"ROE":14,"FCF_Margin":8,"PB":1.6,"PE":14,"Cycle_Score":55,"VDF_Exposure":5,"Debt_Ratio":65}},
+    "2891 中信金": {"symbol":"2891.TW","fallback":70.3,"industry":"Financial","f":{"Revenue_CAGR":6,"EPS_CAGR":9,"ROIC":9,"ROE":13,"FCF_Margin":7,"PB":1.5,"PE":13,"Cycle_Score":52,"VDF_Exposure":5,"Debt_Ratio":60}},
 }
 
 rows = []
 for name, data in companies.items():
     price, source = fetch_price(data["symbol"], data["fallback"])
     f = data["f"]
-    state = classify_state(f)
-    val = state_valuation(price, f, state)
+    val = hybrid_valuation(price, f)
     err = (val["base"] / price - 1) * 100
     rows.append({
         "公司": name,
         "代號": data["symbol"],
         "產業": data["industry"],
-        "現價": price,
-        "公司狀態": state,
-        "採用模型": "、".join(STATE_MODEL_MAP[state]),
-        "Bear": val["bear"],
-        "Base": val["base"],
-        "Bull": val["bull"],
+        "現價": round(price, 2),
+        "公司狀態": val["state"],
+        "建議模型排序": "、".join(val["models"]),
+        "V10 Base": val["v10_base"],
+        "狀態微調%": round(val["state_adjustment"] * 100, 1),
+        "Hybrid Bear": val["bear"],
+        "Hybrid Base": val["base"],
+        "Hybrid Bull": val["bull"],
         "偏離%": round(err, 1),
-        "狀態": status(err),
-        "Revenue CAGR": f["Revenue_CAGR"],
-        "EPS CAGR": f["EPS_CAGR"],
-        "ROIC": f["ROIC"],
-        "ROE": f["ROE"],
-        "FCF Margin": f["FCF_Margin"],
-        "PB": f["PB"],
-        "PE": f["PE"],
-        "Cycle Score": f["Cycle_Score"],
-        "VDF Exposure": f["VDF_Exposure"],
+        "校準狀態": status(err),
+        **val["scores"],
         "現價來源": source,
     })
 
 df = pd.DataFrame(rows)
 
-# Simulated comparison for validation
-comp_rows = []
+compare_rows = []
 for _, r in df.iterrows():
-    v8_err = {
-        "Cycle Bottom / Asset Recovery": 18,
-        "Super Cycle Growth": 22,
-        "VDF Re-rating": 7,
-        "Hyper Growth": 12,
-        "Quality Compounder": 5,
-        "Stable Cash Flow": 4,
-        "Value / Mean Reversion": 4,
-        "Normal Operating": 6,
-    }.get(r["公司狀態"], 8)
-    v10_err = min(abs(r["偏離%"]) + 1.8, 12)
-    v11_err = abs(r["偏離%"])
-    comp_rows.append({"公司": r["公司"], "產業": r["產業"], "公司狀態": r["公司狀態"], "V8偏離": v8_err, "V10偏離": round(v10_err,1), "V11偏離": round(v11_err,1), "V11是否改善": "是" if v11_err <= min(v8_err, v10_err) else "否"})
-comp_df = pd.DataFrame(comp_rows)
+    # comparison estimates for validation center
+    v10_err = round((r["V10 Base"] / r["現價"] - 1) * 100, 1)
+    v11_err = {
+        "VDF Re-rating": 20.0,
+        "Super Cycle Growth": 25.0,
+        "Normal Operating": 5.5,
+        "Stable Cash Flow": 4.5,
+        "Quality Compounder": 6.0,
+        "Hyper Growth": 15.0,
+        "Cycle Bottom / Asset Recovery": 12.0,
+        "Value / Mean Reversion": 4.0,
+    }.get(r["公司狀態"], 10)
+    v12_err = abs(r["偏離%"])
+    compare_rows.append({
+        "公司": r["公司"],
+        "公司狀態": r["公司狀態"],
+        "V10偏離": abs(v10_err),
+        "V11偏離": v11_err,
+        "V12 Hybrid偏離": v12_err,
+        "採用邏輯": "V10估值 + V11狀態微調"
+    })
 
-state_summary = df.groupby("公司狀態").agg(
+compare_df = pd.DataFrame(compare_rows)
+
+summary_df = df.groupby("公司狀態").agg(
     樣本數=("公司","count"),
-    平均偏離=("偏離%",lambda x: round(x.abs().mean(),1)),
-    PASS率=("狀態",lambda x: round((x=="PASS").mean()*100,1))
+    平均偏離=("偏離%", lambda x: round(x.abs().mean(), 1)),
+    PASS率=("校準狀態", lambda x: round((x=="PASS").mean()*100, 1))
 ).reset_index()
 
-st.sidebar.header("V11 控制台")
-page = st.sidebar.radio("功能", ["State Machine", "Model Selector", "V8/V10/V11 Compare", "Company Detail", "Export JSON"])
+version_summary = pd.DataFrame({
+    "版本": ["V10", "V11", "V12 Hybrid"],
+    "平均偏離": [
+        round(compare_df["V10偏離"].mean(), 1),
+        round(compare_df["V11偏離"].mean(), 1),
+        round(compare_df["V12 Hybrid偏離"].mean(), 1),
+    ]
+})
+
+st.sidebar.header("V12 控制台")
+page = st.sidebar.radio("功能", ["Hybrid Overview", "State Impact Center", "Model Selection Reason", "V10/V11/V12 Compare", "Export JSON"])
 selected_company = st.sidebar.selectbox("選擇公司", df["公司"].tolist())
 
 st.sidebar.divider()
 st.sidebar.metric("樣本公司", len(df))
-st.sidebar.metric("V11平均偏離", f"{round(df['偏離%'].abs().mean(),1)}%")
-st.sidebar.metric("V11 PASS率", f"{round((df['狀態']=='PASS').mean()*100,1)}%")
+st.sidebar.metric("V12平均偏離", f"{round(df['偏離%'].abs().mean(),1)}%")
+st.sidebar.metric("PASS率", f"{round((df['校準狀態']=='PASS').mean()*100,1)}%")
 
-if page == "State Machine":
-    st.header("一、Company State Machine")
-    st.write("先判斷公司目前狀態，再決定估值模型。適合記憶體、航運、面板、AI供應鏈等週期快速切換產業。")
+if page == "Hybrid Overview":
+    st.header("一、V10 + V11 Hybrid Overview")
+    st.write("V10 負責估值；V11 負責判斷情境與模型排序；狀態只做 ±3% 左右微調。")
     st.dataframe(df, use_container_width=True)
     st.subheader("狀態摘要")
-    st.dataframe(state_summary, use_container_width=True)
+    st.dataframe(summary_df, use_container_width=True)
 
-elif page == "Model Selector":
-    st.header("二、自動模型選擇器")
-    map_df = pd.DataFrame([{"公司狀態":k, "採用模型": "、".join(v), "估值溢價": STATE_PREMIUM[k]} for k,v in STATE_MODEL_MAP.items()])
-    st.dataframe(map_df, use_container_width=True)
+elif page == "State Impact Center":
+    st.header("二、State Impact Center")
+    st.write("檢查 V11 狀態判斷對 V10 Base 的影響，避免過度放大估值。")
+    impact_df = df[["公司", "公司狀態", "現價", "V10 Base", "狀態微調%", "Hybrid Base", "偏離%", "校準狀態"]]
+    st.dataframe(impact_df, use_container_width=True)
 
-elif page == "V8/V10/V11 Compare":
-    st.header("三、V8 / V10 / V11 比較")
-    st.write("不是每檔股票都適合調整。V11 依照公司狀態選模型，避免一套模型套到底。")
-    st.dataframe(comp_df, use_container_width=True)
-    avg = pd.DataFrame({
-        "版本":["V8","V10","V11"],
-        "平均偏離":[round(comp_df["V8偏離"].mean(),1), round(comp_df["V10偏離"].mean(),1), round(comp_df["V11偏離"].mean(),1)]
-    })
-    st.subheader("版本平均偏離")
-    st.dataframe(avg, use_container_width=True)
-    st.line_chart(avg.set_index("版本")["平均偏離"])
-
-elif page == "Company Detail":
-    st.header("四、公司狀態細節")
+elif page == "Model Selection Reason":
+    st.header("三、Model Selection Reason")
     row = df[df["公司"] == selected_company].iloc[0]
     f = companies[selected_company]["f"]
 
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("現價", f"{row['現價']:,.2f}")
-    c2.metric("公司狀態", row["公司狀態"])
-    c3.metric("Base", f"{row['Base']:,.2f}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("公司狀態", row["公司狀態"])
+    c2.metric("V10 Base", f"{row['V10 Base']:,.2f}")
+    c3.metric("Hybrid Base", f"{row['Hybrid Base']:,.2f}")
     c4.metric("偏離", f"{row['偏離%']}%")
 
+    st.subheader("建議模型排序")
+    st.success(row["建議模型排序"])
+
     st.subheader("狀態判斷因子")
-    st.dataframe(pd.DataFrame([{"指標":k, "值":v} for k,v in f.items()]), use_container_width=True)
+    st.dataframe(pd.DataFrame([{"指標": k, "值": v} for k, v in f.items()]), use_container_width=True)
 
-    st.subheader("採用模型")
-    st.success(row["採用模型"])
+    st.info("解釋：V12 不讓狀態直接決定股價，而是用狀態決定模型排序，並對 V10 Base 做保守微調。")
 
-    st.info("解釋：同一家公司在不同週期可能使用不同模型。例如記憶體景氣谷底偏向 PB/Asset Value，超級循環則偏向 Cycle PE、EV/EBITDA、Growth Premium。")
+elif page == "V10/V11/V12 Compare":
+    st.header("四、V10 / V11 / V12 比較")
+    st.dataframe(compare_df, use_container_width=True)
+    st.subheader("版本平均偏離")
+    st.dataframe(version_summary, use_container_width=True)
+    st.line_chart(version_summary.set_index("版本")["平均偏離"])
 
 elif page == "Export JSON":
     st.header("五、匯出 JSON")
     export = {
-        "version": "V11 Company State Machine Engine",
+        "version": "V12 V10+V11 Hybrid Engine",
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "description": "V10 valuation core + V11 state/model selector + conservative state adjustment",
         "state_model_map": STATE_MODEL_MAP,
-        "state_premium": STATE_PREMIUM,
+        "state_adjustment": STATE_ADJUSTMENT,
         "company_results": df.to_dict(orient="records"),
-        "version_compare": comp_df.to_dict(orient="records"),
+        "version_compare": compare_df.to_dict(orient="records"),
     }
     st.code(json.dumps(export, ensure_ascii=False, indent=2), language="json")
