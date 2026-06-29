@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from typing import Dict, Any, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -10,332 +11,352 @@ except Exception:
     yf = None
 
 st.set_page_config(
-    page_title="Enterprise Valuation Lab V5.3",
+    page_title="Enterprise Valuation Lab V6",
     page_icon="🏛️",
     layout="wide"
 )
 
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("V5.3｜和椿校準版 + Calibration Center")
-st.info("重點：保留現價自動更新與 fallback 備援價，並先完成 6215 和椿第一版估值校準；未校準公司仍只顯示模型池，避免硬給不可靠估值。")
+st.subheader("V6｜產業校準中心 + 財報資料蒐集")
+st.info("先以產業母模型為主：每個產業挑 1～2 家樣本股，先蒐集財報因子，再進入估值校準。")
 
 # ------------------------------------------------------------
-# Quote helpers
+# Universe: industry model samples
+# ------------------------------------------------------------
+INDUSTRY_GROUPS: Dict[str, Dict[str, Any]] = {
+    "AI Semiconductor": {
+        "description": "AI半導體 / 先進製程 / IC設計",
+        "models": ["DCF-FCFF", "EVA", "EBO", "AI Premium", "EV/EBITDA"],
+        "stocks": {
+            "2330.TW": {"name": "台積電", "fallback_price": 2340},
+            "2454.TW": {"name": "聯發科", "fallback_price": 1500},
+        },
+    },
+    "AI Infrastructure": {
+        "description": "AI電力基建 / 電源 / 資料中心供應鏈",
+        "models": ["Quality Compounder", "EVA", "DCF-FCFF", "AI Infrastructure Premium"],
+        "stocks": {
+            "2308.TW": {"name": "台達電", "fallback_price": 1900},
+            "2301.TW": {"name": "光寶科", "fallback_price": 110},
+        },
+    },
+    "Financial": {
+        "description": "金融金控 / 銀行 / 保險",
+        "models": ["PB-ROE", "Residual Income", "Dividend Yield"],
+        "stocks": {
+            "2881.TW": {"name": "富邦金", "fallback_price": 130},
+            "2882.TW": {"name": "國泰金", "fallback_price": 85},
+        },
+    },
+    "Shipping": {
+        "description": "航運循環股",
+        "models": ["EV/EBITDA", "Cycle PE", "FCF Yield", "Asset Value"],
+        "stocks": {
+            "2603.TW": {"name": "長榮", "fallback_price": 182},
+            "2609.TW": {"name": "陽明", "fallback_price": 70},
+        },
+    },
+    "AI Robot": {
+        "description": "AI Robot / 自動化 / 工業機器人",
+        "models": ["AI Robot Premium", "Robot Growth", "Automation PE", "EV/Sales"],
+        "stocks": {
+            "6215.TWO": {"name": "和椿", "fallback_price": 101},
+            "2049.TW": {"name": "上銀", "fallback_price": 260},
+            "4540.TWO": {"name": "全球傳動", "fallback_price": 45},
+        },
+    },
+    "PCB / CCL": {
+        "description": "PCB / 高階CCL / AI高速材料",
+        "models": ["AI Material Premium", "ROIC Premium", "DCF-FCFF", "PE", "EV/EBITDA"],
+        "stocks": {
+            "2383.TW": {"name": "台光電", "fallback_price": 1200},
+            "3037.TW": {"name": "欣興", "fallback_price": 160},
+        },
+    },
+    "Mature Foundry": {
+        "description": "成熟製程晶圓代工",
+        "models": ["DCF-FCFF", "EVA", "EBO", "PB-ROE", "EV/EBITDA"],
+        "stocks": {
+            "2303.TW": {"name": "聯電", "fallback_price": 50},
+            "5347.TWO": {"name": "世界先進", "fallback_price": 95},
+        },
+    },
+    "Memory": {
+        "description": "記憶體 / 模組 / 控制IC",
+        "models": ["Cycle PE", "EV/EBITDA", "FCF Yield", "Inventory Cycle"],
+        "stocks": {
+            "3260.TWO": {"name": "威剛", "fallback_price": 120},
+            "8299.TWO": {"name": "群聯", "fallback_price": 650},
+        },
+    },
+}
+
+# ------------------------------------------------------------
+# Quote and financial helpers
 # ------------------------------------------------------------
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_quote(ticker: str):
-    """Fetch latest price from yfinance. TTL 15 minutes."""
+def fetch_quote(ticker: str, fallback_price: Optional[float] = None) -> Tuple[Optional[float], str]:
     if yf is None:
-        return None, "yfinance 未安裝"
+        return fallback_price, "fallback：yfinance 未安裝"
 
     candidates = [ticker]
-    if ticker.endswith(".TW"):
-        candidates.append(ticker.replace(".TW", ".TWO"))
-    elif ticker.endswith(".TWO"):
+    if ticker.endswith(".TWO"):
         candidates.append(ticker.replace(".TWO", ".TW"))
+    elif ticker.endswith(".TW"):
+        candidates.append(ticker.replace(".TW", ".TWO"))
 
-    for tk in candidates:
+    for tkr in candidates:
         try:
-            t = yf.Ticker(tk)
+            t = yf.Ticker(tkr)
             fast = getattr(t, "fast_info", {}) or {}
             price = fast.get("last_price") or fast.get("lastPrice")
             if price is None:
                 hist = t.history(period="5d", interval="1d")
                 if hist is not None and not hist.empty:
-                    price = float(hist["Close"].dropna().iloc[-1])
+                    close = hist["Close"].dropna()
+                    if len(close):
+                        price = float(close.iloc[-1])
             if price is not None and float(price) > 0:
-                return float(price), f"yfinance 自動更新｜{tk}"
+                return float(price), f"yfinance 自動更新：{tkr}"
         except Exception:
-            continue
-    return None, "抓不到現價"
+            pass
+
+    return fallback_price, "fallback 手動備援價" if fallback_price is not None else "現價抓取失敗"
 
 
-def get_price(company: dict):
-    price, source = fetch_quote(company["ticker"])
-    if price is not None:
-        return price, source
-    fallback = company.get("fallback_price")
-    if fallback is not None:
-        return float(fallback), "fallback 手動備援價"
-    return None, "N/A"
+def _safe_float(x):
+    try:
+        if x is None or pd.isna(x):
+            return None
+        return float(x)
+    except Exception:
+        return None
 
 
-def rating(score: float) -> str:
-    if score >= 90:
-        return "S 核心模型"
-    if score >= 80:
-        return "A 強烈推薦"
-    if score >= 70:
-        return "B 可用"
-    if score >= 60:
-        return "C 觀察"
-    return "D 不建議 / 淘汰"
+def _get_latest_from_df(df: pd.DataFrame, possible_rows) -> Optional[float]:
+    if df is None or df.empty:
+        return None
+    for row in possible_rows:
+        if row in df.index:
+            s = df.loc[row].dropna()
+            if len(s):
+                return _safe_float(s.iloc[0])
+    return None
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_financial_factors(ticker: str) -> Dict[str, Any]:
+    """Collect factors available from yfinance. Missing values are kept as None."""
+    factors: Dict[str, Any] = {
+        "資料來源": "yfinance + fallback/可推導欄位",
+        "營收": None,
+        "毛利": None,
+        "營業利益": None,
+        "稅後淨利": None,
+        "股東權益": None,
+        "總資產": None,
+        "總負債": None,
+        "營業現金流": None,
+        "資本支出": None,
+        "自由現金流FCF": None,
+        "EBITDA": None,
+        "EPS_TTM": None,
+        "ROE": None,
+        "ROA": None,
+        "負債比": None,
+        "FCF_Margin": None,
+        "Dividend_Yield": None,
+        "Trailing_PE": None,
+        "Forward_PE": None,
+        "PB": None,
+        "Market_Cap": None,
+        "Enterprise_Value": None,
+        "資料完整度": 0,
+        "缺漏欄位": [],
+    }
+
+    if yf is None:
+        factors["缺漏欄位"] = [k for k in factors.keys() if k not in ["資料來源", "資料完整度", "缺漏欄位"]]
+        return factors
+
+    try:
+        t = yf.Ticker(ticker)
+        info = getattr(t, "info", {}) or {}
+        fin = t.financials
+        bs = t.balance_sheet
+        cf = t.cashflow
+
+        revenue = _get_latest_from_df(fin, ["Total Revenue", "Operating Revenue"])
+        gross_profit = _get_latest_from_df(fin, ["Gross Profit"])
+        operating_income = _get_latest_from_df(fin, ["Operating Income"])
+        net_income = _get_latest_from_df(fin, ["Net Income", "Net Income Common Stockholders"])
+        ebitda = _get_latest_from_df(fin, ["EBITDA", "Normalized EBITDA"])
+
+        equity = _get_latest_from_df(bs, ["Stockholders Equity", "Total Equity Gross Minority Interest"])
+        assets = _get_latest_from_df(bs, ["Total Assets"])
+        liabilities = _get_latest_from_df(bs, ["Total Liabilities Net Minority Interest", "Total Liabilities"])
+
+        ocf = _get_latest_from_df(cf, ["Operating Cash Flow", "Cash Flow From Continuing Operating Activities"])
+        capex = _get_latest_from_df(cf, ["Capital Expenditure", "Capital Expenditures"])
+
+        fcf = info.get("freeCashflow")
+        fcf = _safe_float(fcf)
+        if fcf is None and ocf is not None and capex is not None:
+            # Yahoo capex is often negative, so OCF + CAPEX is common FCF approximation.
+            fcf = ocf + capex
+
+        factors.update({
+            "營收": revenue,
+            "毛利": gross_profit,
+            "營業利益": operating_income,
+            "稅後淨利": net_income,
+            "股東權益": equity,
+            "總資產": assets,
+            "總負債": liabilities,
+            "營業現金流": ocf,
+            "資本支出": capex,
+            "自由現金流FCF": fcf,
+            "EBITDA": ebitda,
+            "EPS_TTM": _safe_float(info.get("trailingEps")),
+            "Dividend_Yield": _safe_float(info.get("dividendYield")),
+            "Trailing_PE": _safe_float(info.get("trailingPE")),
+            "Forward_PE": _safe_float(info.get("forwardPE")),
+            "PB": _safe_float(info.get("priceToBook")),
+            "Market_Cap": _safe_float(info.get("marketCap")),
+            "Enterprise_Value": _safe_float(info.get("enterpriseValue")),
+        })
+
+        if net_income is not None and equity not in [None, 0]:
+            factors["ROE"] = net_income / equity
+        else:
+            factors["ROE"] = _safe_float(info.get("returnOnEquity"))
+
+        if net_income is not None and assets not in [None, 0]:
+            factors["ROA"] = net_income / assets
+        else:
+            factors["ROA"] = _safe_float(info.get("returnOnAssets"))
+
+        if liabilities is not None and assets not in [None, 0]:
+            factors["負債比"] = liabilities / assets
+
+        if fcf is not None and revenue not in [None, 0]:
+            factors["FCF_Margin"] = fcf / revenue
+
+    except Exception as e:
+        factors["資料來源"] = f"yfinance 財報抓取失敗：{e}"
+
+    core_keys = [
+        "營收", "稅後淨利", "股東權益", "總資產", "總負債",
+        "營業現金流", "自由現金流FCF", "EBITDA", "EPS_TTM", "ROE",
+        "ROA", "負債比", "Dividend_Yield", "Trailing_PE", "PB"
+    ]
+    missing = [k for k in core_keys if factors.get(k) is None]
+    complete = len(core_keys) - len(missing)
+    factors["資料完整度"] = round(complete / len(core_keys) * 100, 1)
+    factors["缺漏欄位"] = missing
+    return factors
 
 
-def weighted_valuation(company: dict, top_n: int = 3):
-    scores = company.get("model_scores", {})
-    vals = company.get("valuation", {}) or {}
-    candidates = []
-    for m, v in vals.items():
-        s = scores.get(m, 0)
-        if s >= 60:
-            candidates.append((m, s, v))
-    candidates = sorted(candidates, key=lambda x: x[1], reverse=True)[:top_n]
-    total_score = sum(s for _, s, _ in candidates)
-    if total_score == 0 or not candidates:
-        return None, []
-    result = {}
-    for case in ["bear", "base", "bull"]:
-        result[case] = sum(v[case] * s for _, s, v in candidates) / total_score
-    weights = [(m, s, s / total_score) for m, s, _ in candidates]
-    return result, weights
+def fmt_num(x, pct=False):
+    if x is None:
+        return "N/A"
+    try:
+        if pct:
+            return f"{float(x) * 100:.2f}%"
+        if abs(float(x)) >= 1e12:
+            return f"{float(x) / 1e12:.2f} 兆"
+        if abs(float(x)) >= 1e8:
+            return f"{float(x) / 1e8:.2f} 億"
+        return f"{float(x):,.2f}"
+    except Exception:
+        return "N/A"
 
 
-def judge_price(price, fair):
-    if fair is None or price is None:
-        return "待校準"
-    bear, bull = fair["bear"], fair["bull"]
-    if price < bear:
-        return "低估區"
-    if price <= bull:
-        return "合理區間"
-    return "高估區"
-
-
-def calibration_result(price, fair):
-    if fair is None or price is None:
-        return "待校準", None
-    gap = (fair["base"] / price - 1) * 100
-    abs_gap = abs(gap)
-    if abs_gap <= 10:
-        return "PASS", gap
-    if abs_gap <= 15:
-        return "WATCH", gap
-    return "FAIL", gap
+def industry_status(group: Dict[str, Any]):
+    rows = []
+    for ticker, meta in group["stocks"].items():
+        price, src = fetch_quote(ticker, meta.get("fallback_price"))
+        factors = fetch_financial_factors(ticker)
+        rows.append({
+            "代號": ticker,
+            "公司": meta["name"],
+            "現價": price,
+            "現價來源": src,
+            "資料完整度": factors["資料完整度"],
+            "缺漏數": len(factors["缺漏欄位"]),
+        })
+    return pd.DataFrame(rows)
 
 # ------------------------------------------------------------
-# Company database
+# Sidebar controls
 # ------------------------------------------------------------
-companies = {
-    "2330 台積電": {
-        "ticker": "2330.TW", "symbol": "2330.TW", "status": "PASS", "fallback_price": 2340,
-        "type": "AI半導體 / 晶圓代工龍頭", "life_cycle": "高資本支出、高ROIC、AI成長溢價",
-        "features": {"ROE": "高", "FCF": "強但受資本支出影響", "EPS CAGR": "高", "負債": "低", "股利特徵": "穩定但非高殖利率"},
-        "model_scores": {"Quality Compounder": 96, "AI Infrastructure Premium": 92, "EVA": 90, "DCF-FCFF": 86, "EBO": 78, "EV/EBITDA": 74},
-        "valuation": {
-            "Quality Compounder": {"bear": 1900, "base": 2200, "bull": 2550},
-            "AI Infrastructure Premium": {"bear": 2050, "base": 2480, "bull": 2850},
-            "EVA": {"bear": 1650, "base": 2050, "bull": 2400},
-        },
-    },
-    "2308 台達電": {
-        "ticker": "2308.TW", "symbol": "2308.TW", "status": "PASS", "fallback_price": 1900,
-        "type": "AI Infrastructure Compounder / 電源與資料中心基建", "life_cycle": "AI電力基建、高品質複利企業",
-        "features": {"ROE": "高且穩定", "FCF": "穩定", "EPS CAGR": "中高", "負債": "低", "股利特徵": "穩定配息"},
-        "model_scores": {"Quality Compounder": 96, "AI Infrastructure Premium": 92, "EVA": 90, "DCF-FCFF": 82, "Residual Income": 76, "PB-ROE": 68},
-        "valuation": {
-            "Quality Compounder": {"bear": 1650, "base": 1900, "bull": 2200},
-            "AI Infrastructure Premium": {"bear": 1700, "base": 1950, "bull": 2300},
-            "EVA": {"bear": 1500, "base": 1700, "bull": 2000},
-        },
-    },
-    "2603 長榮": {
-        "ticker": "2603.TW", "symbol": "2603.TW", "status": "PASS", "fallback_price": 182,
-        "type": "航運循環股", "life_cycle": "景氣循環、獲利波動、運價敏感",
-        "features": {"ROE": "波動", "FCF": "波動", "EPS CAGR": "循環", "負債": "中", "股利特徵": "高波動股利"},
-        "model_scores": {"EV/EBITDA": 94, "Cycle PE": 90, "FCF Yield": 82, "Asset Value": 76, "PB-ROE": 35},
-        "valuation": {
-            "EV/EBITDA": {"bear": 155, "base": 190, "bull": 230},
-            "Cycle PE": {"bear": 150, "base": 180, "bull": 215},
-            "FCF Yield": {"bear": 150, "base": 190, "bull": 225},
-        },
-    },
-    "2881 富邦金": {
-        "ticker": "2881.TW", "symbol": "2881.TW", "status": "PASS", "fallback_price": 130,
-        "type": "金融金控", "life_cycle": "金融資產股、ROE與股利主導估值",
-        "features": {"ROE": "穩定", "FCF": "金融業不適用", "EPS CAGR": "中", "負債": "金融業特殊結構", "股利特徵": "重要估值因子"},
-        "model_scores": {"PB-ROE": 96, "Residual Income": 91, "Dividend Yield": 85, "PE": 66, "DCF-FCFF": 10},
-        "valuation": {
-            "PB-ROE": {"bear": 112, "base": 132, "bull": 150},
-            "Residual Income": {"bear": 108, "base": 128, "bull": 146},
-            "Dividend Yield": {"bear": 105, "base": 122, "bull": 140},
-        },
-    },
-    # 第二批：先蒐集資料與模型池，尚未校準估值
-    "6215 和椿": {
-        "ticker": "6215.TWO", "symbol": "6215.TWO", "status": "PASS", "fallback_price": 85,
-        "type": "AI Robot / 自動化設備", "life_cycle": "機器人題材、設備景氣循環、成長溢價需校準",
-        "features": {"ROE": "中", "FCF": "波動", "EPS CAGR": "題材成長", "負債": "低至中", "股利特徵": "非主要估值因子"},
-        "model_scores": {"Robot Growth": 92, "Automation PE": 86, "EV/Sales": 78, "DCF-FCFF": 68, "PB-ROE": 50, "Dividend Yield": 25},
-        "valuation": {
-            "Robot Growth": {"bear": 72, "base": 88, "bull": 108},
-            "Automation PE": {"bear": 68, "base": 84, "bull": 102},
-            "EV/Sales": {"bear": 65, "base": 82, "bull": 100},
-            "DCF-FCFF": {"bear": 58, "base": 75, "bull": 92},
-        },
-    },
-    "5347 世界先進": {
-        "ticker": "5347.TWO", "symbol": "5347.TWO", "status": "待校準", "fallback_price": 120,
-        "type": "成熟製程晶圓代工", "life_cycle": "成熟製程、景氣循環、特殊製程需求",
-        "features": {"ROE": "待蒐集", "FCF": "待蒐集", "EPS CAGR": "待蒐集", "負債": "待蒐集", "股利特徵": "待蒐集"},
-        "model_scores": {"DCF-FCFF": 86, "EVA": 82, "EBO": 78, "PB-ROE": 72, "EV/EBITDA": 70},
-        "valuation": None,
-    },
-    "2303 聯電": {
-        "ticker": "2303.TW", "symbol": "2303.TW", "status": "待校準", "fallback_price": 48,
-        "type": "成熟製程晶圓代工", "life_cycle": "成熟製程、景氣循環、股利與淨值支撐",
-        "features": {"ROE": "待蒐集", "FCF": "待蒐集", "EPS CAGR": "待蒐集", "負債": "待蒐集", "股利特徵": "待蒐集"},
-        "model_scores": {"PB-ROE": 84, "Dividend Yield": 78, "DCF-FCFF": 76, "EBO": 72, "EV/EBITDA": 70},
-        "valuation": None,
-    },
-    "2383 台光電": {
-        "ticker": "2383.TW", "symbol": "2383.TW", "status": "待校準", "fallback_price": 1300,
-        "type": "AI PCB / 高階CCL", "life_cycle": "AI伺服器高速材料、成長溢價",
-        "features": {"ROE": "待蒐集", "FCF": "待蒐集", "EPS CAGR": "待蒐集", "負債": "待蒐集", "股利特徵": "待蒐集"},
-        "model_scores": {"AI Premium": 90, "Quality Compounder": 84, "DCF-FCFF": 78, "EV/EBITDA": 76, "EVA": 72},
-        "valuation": None,
-    },
-}
+industry = st.sidebar.selectbox("選擇產業模型", list(INDUSTRY_GROUPS.keys()))
+group = INDUSTRY_GROUPS[industry]
+
+st.sidebar.header("產業校準中心")
+st.sidebar.metric("產業模型數", len(INDUSTRY_GROUPS))
+st.sidebar.metric("目前產業樣本數", len(group["stocks"]))
+st.sidebar.caption("V6 先蒐集財報因子，暫不硬塞估值。")
 
 # ------------------------------------------------------------
-# Sidebar calibration center
+# Main layout
 # ------------------------------------------------------------
-st.sidebar.header("Calibration Center")
-pass_count = sum(1 for c in companies.values() if c.get("status") == "PASS")
-watch_count = sum(1 for c in companies.values() if c.get("status") == "WATCH")
-pending_count = sum(1 for c in companies.values() if c.get("status") == "待校準")
-total_count = len(companies)
-calibrated_rate = pass_count / total_count * 100 if total_count else 0
+st.header("一、產業母模型")
+col1, col2 = st.columns([1, 2])
+col1.metric("產業", industry)
+col2.write(group["description"])
 
-st.sidebar.metric("總公司數", total_count)
-st.sidebar.metric("已校準 PASS", pass_count)
-st.sidebar.metric("待校準", pending_count)
-st.sidebar.metric("校準率", f"{calibrated_rate:.1f}%")
-st.sidebar.caption("V5.3：已先完成和椿校準，其餘第二批仍維持待校準。")
-
-status_filter = st.sidebar.radio("顯示篩選", ["全部", "PASS", "待校準"])
-options = list(companies.keys())
-if status_filter != "全部":
-    options = [k for k, v in companies.items() if v.get("status") == status_filter]
-
-stock = st.selectbox("選擇公司", options)
-company = companies[stock]
-price, price_source = get_price(company)
-valuation_result, weights = weighted_valuation(company, top_n=3)
-cal_status, gap = calibration_result(price, valuation_result)
+st.subheader("產業候選模型池")
+st.write("、".join(group["models"]))
 
 st.divider()
+st.header("二、樣本股資料完整度")
+status_df = industry_status(group)
+st.dataframe(status_df, use_container_width=True)
 
-# ------------------------------------------------------------
-# Main display
-# ------------------------------------------------------------
-st.header("一、公司定位")
+st.divider()
+st.header("三、個股財報因子檢查")
+stock_label = st.selectbox(
+    "選擇樣本股",
+    [f"{meta['name']} / {ticker}" for ticker, meta in group["stocks"].items()]
+)
+selected_ticker = stock_label.split(" / ")[-1]
+selected_meta = group["stocks"][selected_ticker]
+price, price_src = fetch_quote(selected_ticker, selected_meta.get("fallback_price"))
+factors = fetch_financial_factors(selected_ticker)
+
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("股票代號", company["symbol"])
-c2.metric("公司類型", company["type"])
-c3.metric("生命週期", company["life_cycle"])
-c4.metric("校準狀態", company.get("status", "待校準"))
+c1.metric("現價", fmt_num(price))
+c2.metric("現價來源", price_src)
+c3.metric("財報完整度", f"{factors['資料完整度']}%")
+c4.metric("缺漏欄位數", len(factors["缺漏欄位"]))
 
-st.header("二、現價更新")
-p1, p2 = st.columns(2)
-p1.metric("現價", "N/A" if price is None else f"{price:,.2f}")
-p2.metric("現價來源", price_source)
+st.subheader("核心財報因子")
+factor_rows = []
+for k in [
+    "營收", "毛利", "營業利益", "稅後淨利", "股東權益", "總資產", "總負債",
+    "營業現金流", "資本支出", "自由現金流FCF", "EBITDA", "EPS_TTM",
+    "ROE", "ROA", "負債比", "FCF_Margin", "Dividend_Yield", "Trailing_PE", "Forward_PE", "PB",
+    "Market_Cap", "Enterprise_Value"
+]:
+    pct = k in ["ROE", "ROA", "負債比", "FCF_Margin", "Dividend_Yield"]
+    factor_rows.append({"因子": k, "值": fmt_num(factors.get(k), pct=pct)})
+st.dataframe(pd.DataFrame(factor_rows), use_container_width=True)
 
-st.header("三、公司特徵")
-feature_cols = st.columns(len(company["features"]))
-for col, (k, v) in zip(feature_cols, company["features"].items()):
-    col.metric(k, v)
-
-st.header("四、模型適配分數")
-score_df = pd.DataFrame([
-    {"模型": m, "適配分數": s, "評級": rating(s)}
-    for m, s in sorted(company["model_scores"].items(), key=lambda x: x[1], reverse=True)
-])
-st.dataframe(score_df, use_container_width=True)
-
-st.header("五、保留 Top 模型")
-if weights:
-    cols = st.columns(len(weights))
-    for col, (m, s, w) in zip(cols, weights):
-        col.success(f"{m}\n\n分數 {s}｜權重 {w:.1%}")
+if factors["缺漏欄位"]:
+    st.warning("缺漏欄位：" + "、".join(factors["缺漏欄位"]))
 else:
-    top_candidates = list(sorted(company["model_scores"].items(), key=lambda x: x[1], reverse=True))[:3]
-    cols = st.columns(len(top_candidates))
-    for col, (m, s) in zip(cols, top_candidates):
-        col.warning(f"{m}\n\n分數 {s}｜待校準")
+    st.success("核心欄位完整，可進入模型校準。")
 
-st.header("六、估值區間")
-if valuation_result:
-    v1, v2, v3, v4 = st.columns(4)
-    v1.metric("Bear 保守價", f"{valuation_result['bear']:,.0f}")
-    v2.metric("Base 合理價", f"{valuation_result['base']:,.0f}")
-    v3.metric("Bull 樂觀價", f"{valuation_result['bull']:,.0f}")
-    v4.metric("校準結果", cal_status)
-
-    verdict = judge_price(price, valuation_result)
-    st.subheader(f"價格判斷：{verdict}")
-    if gap is not None:
-        st.write(f"Base 合理價相對現價差距：{gap:.1f}%")
-    if cal_status == "PASS":
-        st.success("校準通過：合理價與現價差距在可接受範圍內。")
-    elif cal_status == "WATCH":
-        st.warning("觀察：合理價與現價略有偏離，後續需微調權重。")
-    else:
-        st.error("FAIL：合理價與現價偏離過大，需要重新校準。")
-
-    valuation_rows = []
-    for m, v in company.get("valuation", {}).items():
-        valuation_rows.append({
-            "模型": m,
-            "適配分數": company["model_scores"].get(m, 0),
-            "Bear": v["bear"],
-            "Base": v["base"],
-            "Bull": v["bull"],
-            "是否納入": "是" if any(m == x[0] for x in weights) else "否",
-        })
-    st.dataframe(pd.DataFrame(valuation_rows), use_container_width=True)
-else:
-    st.warning("此公司目前為『待校準』：已建立模型池與現價蒐集，但尚未建立 Bear/Base/Bull 估值區間。")
-
-st.header("七、校準總表")
-summary_rows = []
-for name, comp in companies.items():
-    p, src = get_price(comp)
-    fair, ws = weighted_valuation(comp, top_n=3)
-    status, g = calibration_result(p, fair)
-    summary_rows.append({
-        "公司": name,
-        "代號": comp["symbol"],
-        "類型": comp["type"],
-        "資料狀態": comp.get("status", "待校準"),
-        "現價": None if p is None else round(p, 2),
-        "Base合理價": None if fair is None else round(fair["base"], 2),
-        "偏離%": None if g is None else round(g, 1),
-        "校準結果": status,
-        "現價來源": src,
-    })
-st.dataframe(pd.DataFrame(summary_rows), use_container_width=True)
-
-st.header("八、匯出給主平台 JSON")
-export_data = {}
-for name, comp in companies.items():
-    p, src = get_price(comp)
-    fair, ws = weighted_valuation(comp, top_n=3)
-    export_data[comp["symbol"]] = {
-        "name": name,
-        "type": comp["type"],
-        "status": comp.get("status", "待校準"),
-        "selected_models": [m for m, _, _ in ws] if ws else [m for m, _ in sorted(comp["model_scores"].items(), key=lambda x: x[1], reverse=True)[:3]],
-        "weights": {m: round(w, 4) for m, _, w in ws} if ws else None,
-        "valuation": {
-            "bear": round(fair["bear"], 2),
-            "base": round(fair["base"], 2),
-            "bull": round(fair["bull"], 2),
-        } if fair else None,
-        "current_price": p,
-        "price_source": src,
-        "judgement": judge_price(p, fair) if fair else "待校準",
+st.divider()
+st.header("四、產業資料蒐集 JSON")
+export_data = {
+    industry: {
+        "description": group["description"],
+        "models": group["models"],
+        "stocks": status_df.to_dict(orient="records"),
+        "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
+}
 st.code(json.dumps(export_data, ensure_ascii=False, indent=2), language="json")
 
-st.caption(f"最後更新時間：{datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
+st.caption("注意：V6 目標是先確認財報資料能否抓齊。估值校準會在資料完整度達標後進行。")
