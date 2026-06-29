@@ -10,37 +10,68 @@ except Exception:
     yf = None
 
 st.set_page_config(
-    page_title="Enterprise Valuation Lab V5",
+    page_title="Enterprise Valuation Lab V5.1",
     page_icon="🏛️",
     layout="wide"
 )
 
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("V5｜資料蒐集 + 現價自動更新 + 模型池擴充測試")
-st.info("重點：先蒐集 12 家公司資料，現價改為自動更新；尚未校準的公司先標示『待校準』，避免硬塞不可靠估值。")
+st.subheader("V5.1｜資料蒐集 + 現價自動更新 + 備援現價 Fallback")
+st.info("重點：現價先用 yfinance 自動更新；若抓不到，改用 fallback_price 備援價並明確標示來源，避免 N/A 影響估值驗證。")
 
 # ------------------------------------------------------------
 # Helper functions
 # ------------------------------------------------------------
 
 @st.cache_data(ttl=900)
-def fetch_quote(ticker: str):
+def fetch_quote_auto(ticker: str):
     """Fetch latest price from yfinance. TTL 15 minutes."""
     if yf is None:
         return None, "yfinance 未安裝"
     try:
         t = yf.Ticker(ticker)
         fast = getattr(t, "fast_info", {}) or {}
-        price = fast.get("last_price") or fast.get("lastPrice")
+        price = None
+        if isinstance(fast, dict):
+            price = fast.get("last_price") or fast.get("lastPrice")
+        else:
+            price = getattr(fast, "last_price", None) or getattr(fast, "lastPrice", None)
         if price is None:
             hist = t.history(period="5d", interval="1d")
             if not hist.empty:
-                price = float(hist["Close"].dropna().iloc[-1])
+                close = hist["Close"].dropna()
+                if not close.empty:
+                    price = float(close.iloc[-1])
         if price is None:
             return None, "抓不到現價"
-        return float(price), "自動更新"
+        return float(price), f"yfinance 自動更新：{ticker}"
     except Exception as e:
-        return None, f"現價抓取失敗：{e}"
+        return None, f"yfinance 抓取失敗：{ticker}｜{e}"
+
+
+def alt_tickers(ticker: str):
+    """Taiwan tickers sometimes fail on .TW or .TWO; try the alternative suffix."""
+    items = [ticker]
+    if ticker.endswith(".TWO"):
+        items.append(ticker.replace(".TWO", ".TW"))
+    elif ticker.endswith(".TW"):
+        items.append(ticker.replace(".TW", ".TWO"))
+    return list(dict.fromkeys(items))
+
+
+def fetch_quote(company: dict):
+    """Auto quote first, then fallback_price. Returns price and source note."""
+    ticker = company.get("symbol", "")
+    notes = []
+    for tk in alt_tickers(ticker):
+        price, note = fetch_quote_auto(tk)
+        notes.append(note)
+        if price is not None:
+            return price, note
+    fallback = company.get("fallback_price")
+    if fallback is not None:
+        return float(fallback), "fallback 手動備援價（自動抓價失敗）"
+    return None, "自動與備援皆無法取得｜" + "；".join(notes)
 
 
 def rating(score: float) -> str:
@@ -104,6 +135,7 @@ def calibration_result(price, fair):
 companies = {
     "2330 台積電": {
         "symbol": "2330.TW",
+        "fallback_price": 2340,
         "type": "AI半導體 / 晶圓代工龍頭",
         "life_cycle": "高資本支出、高ROIC、AI成長溢價",
         "status": "已校準",
@@ -113,6 +145,7 @@ companies = {
     },
     "2308 台達電": {
         "symbol": "2308.TW",
+        "fallback_price": 1900,
         "type": "AI Infrastructure Compounder / 電源、散熱、工業自動化",
         "life_cycle": "AI電力基建與品質複利企業",
         "status": "已校準",
@@ -122,6 +155,7 @@ companies = {
     },
     "2603 長榮": {
         "symbol": "2603.TW",
+        "fallback_price": 182,
         "type": "航運循環股",
         "life_cycle": "景氣循環、獲利波動、運價敏感",
         "status": "已校準",
@@ -131,6 +165,7 @@ companies = {
     },
     "2881 富邦金": {
         "symbol": "2881.TW",
+        "fallback_price": 130,
         "type": "金融金控",
         "life_cycle": "金融資產股、ROE與股利主導估值",
         "status": "已校準",
@@ -139,49 +174,57 @@ companies = {
         "valuation": {"PB-ROE": {"bear": 110, "base": 132, "bull": 155}, "Residual Income": {"bear": 105, "base": 128, "bull": 150}, "Dividend Yield": {"bear": 100, "base": 122, "bull": 145}, "PE": {"bear": 98, "base": 118, "bull": 140}},
     },
     "2303 聯電": {
-        "symbol": "2303.TW", "type": "成熟半導體 / 晶圓代工", "life_cycle": "成熟製程、景氣循環中低", "status": "待校準",
+        "symbol": "2303.TW",
+        "fallback_price": 45, "type": "成熟半導體 / 晶圓代工", "life_cycle": "成熟製程、景氣循環中低", "status": "待校準",
         "features": {"ROE": "中", "FCF": "中", "EPS CAGR": "低~中", "負債": "低", "股利特徵": "中高"},
         "model_scores": {"PB-ROE": 86, "EV/EBITDA": 82, "EBO": 78, "Dividend Yield": 72, "DCF-FCFF": 70, "AI Premium": 25, "Cycle PE": 62},
         "valuation": {},
     },
     "5347 世界先進": {
-        "symbol": "5347.TWO", "type": "成熟半導體 / 特殊製程", "life_cycle": "成熟製程、股利與循環並重", "status": "待校準",
+        "symbol": "5347.TWO",
+        "fallback_price": 105, "type": "成熟半導體 / 特殊製程", "life_cycle": "成熟製程、股利與循環並重", "status": "待校準",
         "features": {"ROE": "中", "FCF": "中", "EPS CAGR": "低~中", "負債": "低", "股利特徵": "重要"},
         "model_scores": {"PB-ROE": 86, "EV/EBITDA": 82, "Dividend Yield": 78, "EBO": 74, "DCF-FCFF": 68, "AI Premium": 20, "Cycle PE": 62},
         "valuation": {},
     },
     "2382 廣達": {
-        "symbol": "2382.TW", "type": "AI伺服器 / ODM", "life_cycle": "AI伺服器成長，毛利率較低但營收彈性高", "status": "待校準",
+        "symbol": "2382.TW",
+        "fallback_price": 280, "type": "AI伺服器 / ODM", "life_cycle": "AI伺服器成長，毛利率較低但營收彈性高", "status": "待校準",
         "features": {"ROE": "高", "FCF": "中", "EPS CAGR": "高", "負債": "中低", "股利特徵": "中"},
         "model_scores": {"AI Server Cycle": 94, "EV/EBITDA": 88, "PE": 84, "AI Premium": 78, "DCF-FCFF": 70, "PB-ROE": 55},
         "valuation": {},
     },
     "3231 緯創": {
-        "symbol": "3231.TW", "type": "AI伺服器 / ODM", "life_cycle": "AI伺服器成長但波動較高", "status": "待校準",
+        "symbol": "3231.TW",
+        "fallback_price": 125, "type": "AI伺服器 / ODM", "life_cycle": "AI伺服器成長但波動較高", "status": "待校準",
         "features": {"ROE": "中高", "FCF": "波動", "EPS CAGR": "高", "負債": "中", "股利特徵": "中"},
         "model_scores": {"AI Server Cycle": 92, "EV/EBITDA": 86, "PE": 82, "AI Premium": 76, "Cycle PE": 70, "DCF-FCFF": 58},
         "valuation": {},
     },
     "6215 和椿": {
-        "symbol": "6215.TWO", "type": "自動化設備 / 中小型成長股", "life_cycle": "工業自動化與設備需求循環", "status": "待校準",
+        "symbol": "6215.TWO",
+        "fallback_price": 85, "type": "自動化設備 / 中小型成長股", "life_cycle": "工業自動化與設備需求循環", "status": "待校準",
         "features": {"ROE": "中", "FCF": "波動", "EPS CAGR": "中高", "負債": "低~中", "股利特徵": "中"},
         "model_scores": {"Quality Compounder": 82, "PE": 78, "EV/EBITDA": 74, "DCF-FCFF": 70, "PB-ROE": 65, "Cycle PE": 58},
         "valuation": {},
     },
     "2606 裕民": {
-        "symbol": "2606.TW", "type": "散裝航運循環股", "life_cycle": "景氣循環、運價與船隊資產主導", "status": "待校準",
+        "symbol": "2606.TW",
+        "fallback_price": 55, "type": "散裝航運循環股", "life_cycle": "景氣循環、運價與船隊資產主導", "status": "待校準",
         "features": {"ROE": "波動", "FCF": "波動", "EPS CAGR": "循環", "負債": "中", "股利特徵": "高波動"},
         "model_scores": {"EV/EBITDA": 92, "Cycle PE": 88, "Asset Value": 82, "FCF Yield": 78, "PB-ROE": 38, "DCF-FCFF": 25},
         "valuation": {},
     },
     "2882 國泰金": {
-        "symbol": "2882.TW", "type": "金融金控", "life_cycle": "壽險資產重估與股利主導", "status": "待校準",
+        "symbol": "2882.TW",
+        "fallback_price": 70, "type": "金融金控", "life_cycle": "壽險資產重估與股利主導", "status": "待校準",
         "features": {"ROE": "中高", "FCF": "金融業不適用", "EPS CAGR": "中", "負債": "金融業特殊結構", "股利特徵": "重要"},
         "model_scores": {"PB-ROE": 94, "Residual Income": 90, "Dividend Yield": 84, "PE": 68, "EBO": 62, "DCF-FCFF": 8},
         "valuation": {},
     },
     "2891 中信金": {
-        "symbol": "2891.TW", "type": "金融金控", "life_cycle": "銀行獲利與股利穩定性主導", "status": "待校準",
+        "symbol": "2891.TW",
+        "fallback_price": 42, "type": "金融金控", "life_cycle": "銀行獲利與股利穩定性主導", "status": "待校準",
         "features": {"ROE": "穩定", "FCF": "金融業不適用", "EPS CAGR": "中", "負債": "金融業特殊結構", "股利特徵": "重要"},
         "model_scores": {"PB-ROE": 94, "Residual Income": 88, "Dividend Yield": 86, "PE": 70, "EBO": 62, "DCF-FCFF": 8},
         "valuation": {},
@@ -198,7 +241,7 @@ mode = st.sidebar.radio("模式", ["單股檢視", "12家公司資料總覽"])
 if mode == "12家公司資料總覽":
     rows = []
     for name, c in companies.items():
-        price, note = fetch_quote(c["symbol"])
+        price, note = fetch_quote(c)
         fair, weights = weighted_valuation(c)
         cal, gap = calibration_result(price, fair)
         rows.append({
@@ -221,9 +264,9 @@ if mode == "12家公司資料總覽":
 stock = st.selectbox("選擇公司", list(companies.keys()))
 company = companies[stock]
 
-live_price, price_note = fetch_quote(company["symbol"])
+live_price, price_note = fetch_quote(company)
 if live_price is None:
-    st.warning(f"現價未成功更新：{price_note}")
+    st.warning(f"現價未成功自動更新：{price_note}")
 
 valuation_result, weights = weighted_valuation(company, top_n=3)
 calibration, gap = calibration_result(live_price, valuation_result)
