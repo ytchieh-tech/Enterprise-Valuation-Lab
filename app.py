@@ -9,8 +9,8 @@ st.set_page_config(
 )
 
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("V4｜模型適配 + 綜合估值區間 Bear / Base / Bull")
-st.info("先用四家公司驗證：台積電、台達電、長榮、富邦金。重點是先確認模型選擇與估值區間是否合理。")
+st.subheader("V4.1｜模型適配 + 市場校準估值區間 Bear / Base / Bull")
+st.info("V4.1 先校準四家公司：修正現價、加入市場校準係數，驗證估值區間是否能貼近現實。")
 
 companies = {
     "2330 台積電": {
@@ -45,8 +45,8 @@ companies = {
     },
     "2308 台達電": {
         "symbol": "2308.TW",
-        "type": "Quality Compounder / 電源與工業自動化",
-        "life_cycle": "穩定成長、高品質複利企業",
+        "type": "AI Infrastructure Compounder / 電源與資料中心基建",
+        "life_cycle": "AI資料中心電源、散熱與工業自動化高品質複利企業",
         "features": {
             "ROE": "高且穩定",
             "FCF": "穩定",
@@ -55,23 +55,25 @@ companies = {
             "股利特徵": "穩定配息"
         },
         "model_scores": {
-            "EVA": 93,
-            "Quality Compounder": 89,
+            "Quality Compounder": 96,
+            "AI Infrastructure Premium": 94,
+            "EVA": 88,
             "DCF-FCFF": 82,
-            "Residual Income": 76,
-            "PB-ROE": 68,
-            "AI Premium": 42,
-            "Cycle PE": 18,
-            "EV/EBITDA": 55
+            "Residual Income": 72,
+            "PB-ROE": 58,
+            "AI Premium": 55,
+            "Cycle PE": 10,
+            "EV/EBITDA": 60
         },
         "valuation": {
-            "EVA": {"bear": 390, "base": 460, "bull": 540},
-            "Quality Compounder": {"bear": 410, "base": 490, "bull": 580},
-            "DCF-FCFF": {"bear": 370, "base": 445, "bull": 520},
-            "Residual Income": {"bear": 360, "base": 430, "bull": 500},
-            "PB-ROE": {"bear": 340, "base": 410, "bull": 480}
+            "Quality Compounder": {"bear": 1650, "base": 1900, "bull": 2250},
+            "AI Infrastructure Premium": {"bear": 1700, "base": 2000, "bull": 2400},
+            "EVA": {"bear": 1350, "base": 1650, "bull": 2050},
+            "DCF-FCFF": {"bear": 1250, "base": 1550, "bull": 1900},
+            "Residual Income": {"bear": 1100, "base": 1400, "bull": 1700},
+            "PB-ROE": {"bear": 900, "base": 1150, "bull": 1400}
         },
-        "current_price": 430
+        "current_price": 1900
     },
     "2603 長榮": {
         "symbol": "2603.TW",
@@ -95,12 +97,12 @@ companies = {
             "AI Premium": 5
         },
         "valuation": {
-            "EV/EBITDA": {"bear": 180, "base": 240, "bull": 320},
-            "Cycle PE": {"bear": 170, "base": 230, "bull": 300},
-            "FCF Yield": {"bear": 160, "base": 220, "bull": 290},
-            "Asset Value": {"bear": 150, "base": 210, "bull": 280}
+            "EV/EBITDA": {"bear": 150, "base": 195, "bull": 250},
+            "Cycle PE": {"bear": 145, "base": 185, "bull": 235},
+            "FCF Yield": {"bear": 140, "base": 180, "bull": 225},
+            "Asset Value": {"bear": 135, "base": 170, "bull": 215}
         },
-        "current_price": 220
+        "current_price": 182
     },
     "2881 富邦金": {
         "symbol": "2881.TW",
@@ -124,12 +126,12 @@ companies = {
             "Cycle PE": 20
         },
         "valuation": {
-            "PB-ROE": {"bear": 82, "base": 98, "bull": 115},
-            "Residual Income": {"bear": 80, "base": 95, "bull": 112},
-            "Dividend Yield": {"bear": 75, "base": 90, "bull": 105},
-            "PE": {"bear": 78, "base": 92, "bull": 108}
+            "PB-ROE": {"bear": 110, "base": 132, "bull": 155},
+            "Residual Income": {"bear": 105, "base": 128, "bull": 150},
+            "Dividend Yield": {"bear": 100, "base": 122, "bull": 145},
+            "PE": {"bear": 98, "base": 118, "bull": 140}
         },
-        "current_price": 95
+        "current_price": 130
     }
 }
 
@@ -233,6 +235,14 @@ if valuation_result:
     gap = (valuation_result["base"] / company["current_price"] - 1) * 100
     st.subheader(f"判斷：{verdict}")
     st.write(f"Base 合理價相對現價差距：{gap:.1f}%")
+
+    abs_gap = abs(gap)
+    if abs_gap <= 15:
+        st.success("校準結果：PASS｜Base合理價與現價差距在 ±15% 內。")
+    elif abs_gap <= 30:
+        st.warning("校準結果：WATCH｜差距在 ±15%～30%，需觀察權重或景氣位置。")
+    else:
+        st.error("校準結果：FAIL｜差距超過 ±30%，需重新檢查模型權重或估值基準。")
 
     if verdict == "低估區":
         st.success("現價低於保守價，屬於低估區。")
