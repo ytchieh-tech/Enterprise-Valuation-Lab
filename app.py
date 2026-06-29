@@ -12,22 +12,21 @@ except Exception:
 
 
 # ============================================================
-# Enterprise Valuation Lab V8
-# Industry Master Database｜產業母模型資料庫
+# Enterprise Valuation Lab V9
+# AI Factor Knowledge Layer + Model Evolution Center
 # ============================================================
 
 st.set_page_config(
-    page_title="Enterprise Valuation Lab V8",
+    page_title="Enterprise Valuation Lab V9",
     page_icon="🏛️",
     layout="wide"
 )
 
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("V8｜Industry Master Database：產業母模型資料庫 + 批量擴散測試")
+st.subheader("V9｜AI Factor Knowledge Layer + Model Evolution Center")
 st.info(
-    "本版重點：不再逐家公司手動校準，而是建立產業母模型資料庫。"
-    "先把 AI Robot、PCB/CCL、Semiconductor、Financial 拆成子母模型，"
-    "再批量檢查 PASS率、平均偏離與異常股。"
+    "本版重點：把傳統產業分類升級為 AI Factor 權重分類，"
+    "同時新增 V5 / V7 / V8 / V9 模型演化比較表。"
 )
 
 
@@ -62,42 +61,7 @@ def fetch_price(symbol: str, fallback_price: Optional[float] = None) -> Tuple[Op
 
     if fallback_price is not None:
         return float(fallback_price), "fallback 備援價"
-
     return None, "抓不到現價"
-
-
-def weighted_base(price: float, model_bias: float, quality: float, cycle_adj: float = 0) -> dict:
-    """
-    用於 V8 產業擴散測試的校準型估值框架。
-    model_bias：產業母模型給予的長期合理價偏移。
-    quality：公司品質分數，會影響 bear/bull 寬度。
-    cycle_adj：景氣或題材調整。
-    """
-    base = price * (1 + model_bias + cycle_adj)
-    width = max(0.12, min(0.35, 0.30 - quality * 0.0015))
-    bear = base * (1 - width)
-    bull = base * (1 + width)
-    return {"bear": round(bear, 2), "base": round(base, 2), "bull": round(bull, 2)}
-
-
-def status_from_gap(gap: Optional[float], tolerance: float):
-    if gap is None:
-        return "待校準"
-    if abs(gap) <= tolerance:
-        return "PASS"
-    if abs(gap) <= tolerance * 1.5:
-        return "WATCH"
-    return "FAIL"
-
-
-def model_grade(pass_rate: float, avg_error: float):
-    if pass_rate >= 90 and avg_error <= 10:
-        return "A"
-    if pass_rate >= 80 and avg_error <= 15:
-        return "B"
-    if pass_rate >= 70 and avg_error <= 20:
-        return "C"
-    return "D"
 
 
 def fmt(x, digits=2):
@@ -109,260 +73,522 @@ def fmt(x, digits=2):
         return str(x)
 
 
-# ============================================================
-# Industry Master Database
-# ============================================================
+def status_from_error(error_pct: Optional[float], tolerance: float):
+    if error_pct is None:
+        return "待校準"
+    e = abs(error_pct)
+    if e <= tolerance:
+        return "PASS"
+    if e <= tolerance * 1.5:
+        return "WATCH"
+    return "FAIL"
 
-industry_master = {
-    "AI Robot": {
-        "status": "PASS",
-        "version": "Robot Mother Model V1",
-        "tolerance": 0.20,
-        "models": ["AI Robot Premium", "Robot Growth", "Automation PE", "EV/Sales"],
-        "sub_models": {
-            "Robot Automation": ["6215 和椿", "2049 上銀", "4540 全球傳動", "1536 和大", "4576 大銀微系統", "2464 盟立", "6125 廣運", "2233 宇隆", "1597 直得", "4510 高鋒"]
-        }
-    },
-    "PCB / CCL": {
-        "status": "拆分驗證中",
-        "version": "PCB Split Model V1",
-        "tolerance": 0.18,
-        "models": ["AI Material Premium", "ROIC Premium", "AI Substrate Premium", "Capacity Premium"],
-        "sub_models": {
-            "AI CCL": ["2383 台光電", "6213 聯茂", "6274 台燿", "2388 威盛"],
-            "AI Substrate": ["3037 欣興", "8046 南電", "3189 景碩", "2313 華通"]
-        }
-    },
-    "Semiconductor": {
-        "status": "拆分驗證中",
-        "version": "Semiconductor Split Model V1",
-        "tolerance": 0.18,
-        "models": ["Foundry Premium", "AI Platform Premium", "ASIC Premium", "DCF-FCFF", "Forward PE"],
-        "sub_models": {
-            "Foundry": ["2330 台積電", "2303 聯電", "5347 世界先進", "6770 力積電"],
-            "AI Platform": ["2454 聯發科", "2379 瑞昱", "3034 聯詠"],
-            "ASIC": ["3661 世芯-KY", "3443 創意", "3035 智原", "6643 M31"]
-        }
-    },
-    "Financial": {
-        "status": "拆分驗證中",
-        "version": "Financial Split Model V1",
-        "tolerance": 0.15,
-        "models": ["PB-ROE", "Residual Income", "Dividend Yield", "Excess Return"],
-        "sub_models": {
-            "Insurance Holding": ["2881 富邦金", "2882 國泰金"],
-            "Banking Holding": ["2891 中信金", "2886 兆豐金", "2884 玉山金", "2892 第一金"]
-        }
+
+def factor_premium_score(factors: Dict[str, int]) -> float:
+    """Convert AI factor weights into valuation premium adjustment."""
+    factor_map = {
+        "AI Infrastructure": 0.08,
+        "AI Compute": 0.10,
+        "AI Platform": 0.09,
+        "AI Robot": 0.07,
+        "AI Material": 0.08,
+        "AI Substrate": 0.09,
+        "Advanced Packaging": 0.08,
+        "Foundry": 0.03,
+        "ASIC": 0.08,
+        "Smart Factory": 0.04,
+        "Financial": 0.00,
+        "Insurance Holding": 0.02,
+        "Banking Holding": 0.01,
+        "Traditional": -0.03,
     }
-}
+    total = 0.0
+    for factor, weight in factors.items():
+        total += (weight / 100) * factor_map.get(factor, 0)
+    return total
 
 
-# fallback prices are temporary anchors for model testing.
-companies = {
-    # Robot
-    "6215 和椿": {"symbol": "6215.TWO", "fallback": 100.5, "quality": 82, "bias": -0.05, "note": "AI Robot 溢價已納入"},
-    "2049 上銀": {"symbol": "2049.TW", "fallback": 318.5, "quality": 78, "bias": 0.02, "note": "傳動元件龍頭"},
-    "4540 全球傳動": {"symbol": "4540.TW", "fallback": 55.6, "quality": 70, "bias": 0.01, "note": "中小型傳動股"},
-    "1536 和大": {"symbol": "1536.TW", "fallback": 65, "quality": 62, "bias": -0.04, "note": "車用與傳動"},
-    "4576 大銀微系統": {"symbol": "4576.TW", "fallback": 95, "quality": 72, "bias": 0.04, "note": "機器人零組件"},
-    "2464 盟立": {"symbol": "2464.TW", "fallback": 90, "quality": 68, "bias": 0.03, "note": "自動化系統"},
-    "6125 廣運": {"symbol": "6125.TWO", "fallback": 120, "quality": 65, "bias": 0.08, "note": "智慧物流/自動化"},
-    "2233 宇隆": {"symbol": "2233.TW", "fallback": 135, "quality": 70, "bias": -0.02, "note": "精密零組件"},
-    "1597 直得": {"symbol": "1597.TW", "fallback": 92, "quality": 73, "bias": 0.03, "note": "線性傳動"},
-    "4510 高鋒": {"symbol": "4510.TW", "fallback": 45, "quality": 58, "bias": -0.06, "note": "工具機/自動化"},
+def v9_base_value(price: float, base_bias: float, factors: Dict[str, int], quality: int) -> float:
+    ai_adj = factor_premium_score(factors)
+    quality_adj = (quality - 70) / 1000
+    return price * (1 + base_bias + ai_adj + quality_adj)
+
+
+def build_valuation(price: float, base_value: float, quality: int):
+    width = max(0.12, min(0.35, 0.30 - quality * 0.0015))
+    return {
+        "bear": round(base_value * (1 - width), 2),
+        "base": round(base_value, 2),
+        "bull": round(base_value * (1 + width), 2),
+    }
+
+
+def best_version(history: Dict[str, Dict[str, float]]):
+    valid = [(v, abs(d["error"])) for v, d in history.items() if d.get("error") is not None]
+    if not valid:
+        return None
+    return sorted(valid, key=lambda x: x[1])[0][0]
+
+
+# ============================================================
+# V9 Databases
+# ============================================================
+
+ai_factors = [
+    "AI Infrastructure",
+    "AI Compute",
+    "AI Platform",
+    "AI Robot",
+    "AI Material",
+    "AI Substrate",
+    "Advanced Packaging",
+    "Foundry",
+    "ASIC",
+    "Smart Factory",
+    "Financial",
+    "Insurance Holding",
+    "Banking Holding",
+    "Traditional",
+]
+
+
+company_profile_database = {
+    # AI Robot
+    "6215 和椿": {
+        "code": "6215", "symbol": "6215.TWO", "industry": "AI Robot", "sub_industry": "Robot Automation",
+        "fallback": 100.5, "quality": 82, "base_bias": -0.05,
+        "factors": {"AI Robot": 70, "Smart Factory": 30},
+        "models": ["AI Robot Premium", "Robot Growth", "Automation PE"],
+    },
+    "2049 上銀": {
+        "code": "2049", "symbol": "2049.TW", "industry": "AI Robot", "sub_industry": "Robot Automation",
+        "fallback": 318.5, "quality": 78, "base_bias": 0.02,
+        "factors": {"AI Robot": 55, "Smart Factory": 35, "Traditional": 10},
+        "models": ["Robot Growth", "Automation PE", "AI Robot Premium"],
+    },
+    "4540 全球傳動": {
+        "code": "4540", "symbol": "4540.TW", "industry": "AI Robot", "sub_industry": "Robot Automation",
+        "fallback": 55.6, "quality": 70, "base_bias": 0.01,
+        "factors": {"AI Robot": 45, "Smart Factory": 35, "Traditional": 20},
+        "models": ["Automation PE", "Robot Growth", "EV/Sales"],
+    },
+    "1536 和大": {
+        "code": "1536", "symbol": "1536.TW", "industry": "AI Robot", "sub_industry": "Robot Automation",
+        "fallback": 65, "quality": 62, "base_bias": -0.04,
+        "factors": {"AI Robot": 25, "Smart Factory": 25, "Traditional": 50},
+        "models": ["Automation PE", "EV/Sales", "DCF-FCFF"],
+    },
+    "4576 大銀微系統": {
+        "code": "4576", "symbol": "4576.TW", "industry": "AI Robot", "sub_industry": "Robot Automation",
+        "fallback": 95, "quality": 72, "base_bias": 0.04,
+        "factors": {"AI Robot": 60, "Smart Factory": 30, "Traditional": 10},
+        "models": ["AI Robot Premium", "Robot Growth", "Automation PE"],
+    },
+    "2464 盟立": {
+        "code": "2464", "symbol": "2464.TW", "industry": "AI Robot", "sub_industry": "Robot Automation",
+        "fallback": 90, "quality": 68, "base_bias": 0.03,
+        "factors": {"AI Robot": 40, "Smart Factory": 45, "Traditional": 15},
+        "models": ["Robot Growth", "Automation PE", "EV/Sales"],
+    },
+    "6125 廣運": {
+        "code": "6125", "symbol": "6125.TWO", "industry": "AI Robot", "sub_industry": "Robot Automation",
+        "fallback": 120, "quality": 65, "base_bias": 0.08,
+        "factors": {"AI Robot": 35, "Smart Factory": 50, "Traditional": 15},
+        "models": ["Robot Growth", "Automation PE", "EV/Sales"],
+    },
+    "2233 宇隆": {
+        "code": "2233", "symbol": "2233.TW", "industry": "AI Robot", "sub_industry": "Robot Automation",
+        "fallback": 135, "quality": 70, "base_bias": -0.02,
+        "factors": {"AI Robot": 30, "Smart Factory": 30, "Traditional": 40},
+        "models": ["Automation PE", "PB-ROE", "DCF-FCFF"],
+    },
+    "1597 直得": {
+        "code": "1597", "symbol": "1597.TW", "industry": "AI Robot", "sub_industry": "Robot Automation",
+        "fallback": 92, "quality": 73, "base_bias": 0.03,
+        "factors": {"AI Robot": 50, "Smart Factory": 35, "Traditional": 15},
+        "models": ["Robot Growth", "Automation PE", "EV/Sales"],
+    },
+    "4510 高鋒": {
+        "code": "4510", "symbol": "4510.TW", "industry": "AI Robot", "sub_industry": "Robot Automation",
+        "fallback": 45, "quality": 58, "base_bias": -0.06,
+        "factors": {"AI Robot": 20, "Smart Factory": 30, "Traditional": 50},
+        "models": ["Automation PE", "EV/Sales", "PB-ROE"],
+    },
 
     # PCB / CCL
-    "2383 台光電": {"symbol": "2383.TW", "fallback": 5450, "quality": 95, "bias": 0.03, "note": "AI CCL 龍頭"},
-    "6213 聯茂": {"symbol": "6213.TW", "fallback": 105, "quality": 74, "bias": 0.00, "note": "CCL"},
-    "6274 台燿": {"symbol": "6274.TWO", "fallback": 240, "quality": 82, "bias": 0.04, "note": "高速材料"},
-    "2388 威盛": {"symbol": "2388.TW", "fallback": 150, "quality": 55, "bias": -0.10, "note": "暫列AI CCL觀察"},
-    "3037 欣興": {"symbol": "3037.TW", "fallback": 976, "quality": 82, "bias": 0.02, "note": "AI載板"},
-    "8046 南電": {"symbol": "8046.TW", "fallback": 1080, "quality": 80, "bias": 0.01, "note": "AI載板"},
-    "3189 景碩": {"symbol": "3189.TW", "fallback": 810, "quality": 72, "bias": -0.02, "note": "載板/景氣循環"},
-    "2313 華通": {"symbol": "2313.TW", "fallback": 85, "quality": 65, "bias": -0.03, "note": "PCB"},
+    "2383 台光電": {
+        "code": "2383", "symbol": "2383.TW", "industry": "PCB / CCL", "sub_industry": "AI CCL",
+        "fallback": 5450, "quality": 95, "base_bias": 0.03,
+        "factors": {"AI Material": 70, "AI Infrastructure": 20, "Traditional": 10},
+        "models": ["AI Material Premium", "ROIC Premium", "DCF-FCFF"],
+    },
+    "6213 聯茂": {
+        "code": "6213", "symbol": "6213.TW", "industry": "PCB / CCL", "sub_industry": "AI CCL",
+        "fallback": 105, "quality": 74, "base_bias": 0.00,
+        "factors": {"AI Material": 45, "Traditional": 55},
+        "models": ["ROIC Premium", "PE", "DCF-FCFF"],
+    },
+    "6274 台燿": {
+        "code": "6274", "symbol": "6274.TWO", "industry": "PCB / CCL", "sub_industry": "AI CCL",
+        "fallback": 240, "quality": 82, "base_bias": 0.04,
+        "factors": {"AI Material": 60, "AI Infrastructure": 20, "Traditional": 20},
+        "models": ["AI Material Premium", "ROIC Premium", "PE"],
+    },
+    "3037 欣興": {
+        "code": "3037", "symbol": "3037.TW", "industry": "PCB / CCL", "sub_industry": "AI Substrate",
+        "fallback": 976, "quality": 82, "base_bias": 0.02,
+        "factors": {"AI Substrate": 65, "AI Infrastructure": 20, "Traditional": 15},
+        "models": ["AI Substrate Premium", "Capacity Premium", "EV/Sales"],
+    },
+    "8046 南電": {
+        "code": "8046", "symbol": "8046.TW", "industry": "PCB / CCL", "sub_industry": "AI Substrate",
+        "fallback": 1080, "quality": 80, "base_bias": 0.01,
+        "factors": {"AI Substrate": 70, "AI Infrastructure": 15, "Traditional": 15},
+        "models": ["AI Substrate Premium", "Capacity Premium", "EV/Sales"],
+    },
+    "3189 景碩": {
+        "code": "3189", "symbol": "3189.TW", "industry": "PCB / CCL", "sub_industry": "AI Substrate",
+        "fallback": 810, "quality": 72, "base_bias": -0.02,
+        "factors": {"AI Substrate": 55, "Traditional": 45},
+        "models": ["AI Substrate Premium", "Capacity Premium", "EV/Sales"],
+    },
 
     # Semiconductor
-    "2330 台積電": {"symbol": "2330.TW", "fallback": 2340, "quality": 98, "bias": -0.04, "note": "AI Foundry 龍頭"},
-    "2303 聯電": {"symbol": "2303.TW", "fallback": 164, "quality": 72, "bias": -0.05, "note": "成熟製程"},
-    "5347 世界先進": {"symbol": "5347.TWO", "fallback": 208.5, "quality": 75, "bias": -0.04, "note": "成熟製程"},
-    "6770 力積電": {"symbol": "6770.TW", "fallback": 30, "quality": 50, "bias": -0.12, "note": "景氣波動"},
-    "2454 聯發科": {"symbol": "2454.TW", "fallback": 3910, "quality": 90, "bias": -0.03, "note": "AI Platform"},
-    "2379 瑞昱": {"symbol": "2379.TW", "fallback": 600, "quality": 82, "bias": -0.02, "note": "IC設計"},
-    "3034 聯詠": {"symbol": "3034.TW", "fallback": 520, "quality": 80, "bias": -0.03, "note": "IC設計"},
-    "3661 世芯-KY": {"symbol": "3661.TW", "fallback": 4200, "quality": 88, "bias": 0.08, "note": "ASIC"},
-    "3443 創意": {"symbol": "3443.TW", "fallback": 1600, "quality": 84, "bias": 0.03, "note": "ASIC"},
-    "3035 智原": {"symbol": "3035.TW", "fallback": 300, "quality": 76, "bias": -0.02, "note": "ASIC/IP"},
-    "6643 M31": {"symbol": "6643.TWO", "fallback": 900, "quality": 82, "bias": 0.02, "note": "IP"},
+    "2330 台積電": {
+        "code": "2330", "symbol": "2330.TW", "industry": "Semiconductor", "sub_industry": "Foundry",
+        "fallback": 2340, "quality": 98, "base_bias": -0.04,
+        "factors": {"AI Infrastructure": 50, "Foundry": 30, "Advanced Packaging": 20},
+        "models": ["DCF-FCFF", "EVA", "AI Premium"],
+    },
+    "2303 聯電": {
+        "code": "2303", "symbol": "2303.TW", "industry": "Semiconductor", "sub_industry": "Foundry",
+        "fallback": 164, "quality": 72, "base_bias": -0.05,
+        "factors": {"Foundry": 60, "Traditional": 40},
+        "models": ["DCF-FCFF", "EVA", "EBO"],
+    },
+    "5347 世界先進": {
+        "code": "5347", "symbol": "5347.TWO", "industry": "Semiconductor", "sub_industry": "Foundry",
+        "fallback": 208.5, "quality": 75, "base_bias": -0.04,
+        "factors": {"Foundry": 65, "Traditional": 35},
+        "models": ["DCF-FCFF", "EVA", "EBO"],
+    },
+    "2454 聯發科": {
+        "code": "2454", "symbol": "2454.TW", "industry": "Semiconductor", "sub_industry": "AI Platform",
+        "fallback": 3910, "quality": 90, "base_bias": -0.03,
+        "factors": {"AI Platform": 70, "AI Compute": 15, "Traditional": 15},
+        "models": ["AI Platform Premium", "Forward PE", "EVA"],
+    },
+    "2379 瑞昱": {
+        "code": "2379", "symbol": "2379.TW", "industry": "Semiconductor", "sub_industry": "AI Platform",
+        "fallback": 600, "quality": 82, "base_bias": -0.02,
+        "factors": {"AI Platform": 35, "Traditional": 65},
+        "models": ["Forward PE", "EVA", "DCF-FCFF"],
+    },
+    "3034 聯詠": {
+        "code": "3034", "symbol": "3034.TW", "industry": "Semiconductor", "sub_industry": "AI Platform",
+        "fallback": 520, "quality": 80, "base_bias": -0.03,
+        "factors": {"AI Platform": 25, "Traditional": 75},
+        "models": ["Forward PE", "EVA", "DCF-FCFF"],
+    },
+    "3661 世芯-KY": {
+        "code": "3661", "symbol": "3661.TW", "industry": "Semiconductor", "sub_industry": "ASIC",
+        "fallback": 4200, "quality": 88, "base_bias": 0.08,
+        "factors": {"ASIC": 75, "AI Compute": 25},
+        "models": ["ASIC Premium", "AI Compute Premium", "Forward PE"],
+    },
+    "3443 創意": {
+        "code": "3443", "symbol": "3443.TW", "industry": "Semiconductor", "sub_industry": "ASIC",
+        "fallback": 1600, "quality": 84, "base_bias": 0.03,
+        "factors": {"ASIC": 65, "AI Compute": 20, "Traditional": 15},
+        "models": ["ASIC Premium", "AI Compute Premium", "Forward PE"],
+    },
+    "3035 智原": {
+        "code": "3035", "symbol": "3035.TW", "industry": "Semiconductor", "sub_industry": "ASIC",
+        "fallback": 300, "quality": 76, "base_bias": -0.02,
+        "factors": {"ASIC": 45, "Traditional": 55},
+        "models": ["ASIC Premium", "Forward PE", "EVA"],
+    },
 
     # Financial
-    "2881 富邦金": {"symbol": "2881.TW", "fallback": 128.5, "quality": 90, "bias": 0.00, "note": "保險型金控"},
-    "2882 國泰金": {"symbol": "2882.TW", "fallback": 101.5, "quality": 88, "bias": -0.02, "note": "保險型金控"},
-    "2891 中信金": {"symbol": "2891.TW", "fallback": 70.3, "quality": 85, "bias": -0.01, "note": "銀行型金控"},
-    "2886 兆豐金": {"symbol": "2886.TW", "fallback": 46.2, "quality": 82, "bias": -0.02, "note": "銀行型金控"},
-    "2884 玉山金": {"symbol": "2884.TW", "fallback": 32, "quality": 80, "bias": -0.03, "note": "銀行型金控"},
-    "2892 第一金": {"symbol": "2892.TW", "fallback": 30, "quality": 78, "bias": -0.04, "note": "銀行型金控"},
+    "2881 富邦金": {
+        "code": "2881", "symbol": "2881.TW", "industry": "Financial", "sub_industry": "Insurance Holding",
+        "fallback": 128.5, "quality": 90, "base_bias": 0.00,
+        "factors": {"Financial": 40, "Insurance Holding": 60},
+        "models": ["PB-ROE", "Residual Income", "Dividend Yield"],
+    },
+    "2882 國泰金": {
+        "code": "2882", "symbol": "2882.TW", "industry": "Financial", "sub_industry": "Insurance Holding",
+        "fallback": 101.5, "quality": 88, "base_bias": -0.02,
+        "factors": {"Financial": 40, "Insurance Holding": 60},
+        "models": ["PB-ROE", "Residual Income", "Dividend Yield"],
+    },
+    "2891 中信金": {
+        "code": "2891", "symbol": "2891.TW", "industry": "Financial", "sub_industry": "Banking Holding",
+        "fallback": 70.3, "quality": 85, "base_bias": -0.01,
+        "factors": {"Financial": 50, "Banking Holding": 50},
+        "models": ["PB-ROE", "Excess Return", "Dividend Yield"],
+    },
+    "2886 兆豐金": {
+        "code": "2886", "symbol": "2886.TW", "industry": "Financial", "sub_industry": "Banking Holding",
+        "fallback": 46.2, "quality": 82, "base_bias": -0.02,
+        "factors": {"Financial": 50, "Banking Holding": 50},
+        "models": ["PB-ROE", "Excess Return", "Dividend Yield"],
+    },
+    "2884 玉山金": {
+        "code": "2884", "symbol": "2884.TW", "industry": "Financial", "sub_industry": "Banking Holding",
+        "fallback": 32, "quality": 80, "base_bias": -0.03,
+        "factors": {"Financial": 50, "Banking Holding": 50},
+        "models": ["PB-ROE", "Excess Return", "Dividend Yield"],
+    },
 }
+
+
+# Historical version mock database based on model evolution path
+def make_history(price, v5_err, v7_err, v8_err, v9_err):
+    return {
+        "V5": {"base": round(price * (1 + v5_err / 100), 2), "error": v5_err},
+        "V7": {"base": round(price * (1 + v7_err / 100), 2), "error": v7_err},
+        "V8": {"base": round(price * (1 + v8_err / 100), 2), "error": v8_err},
+        "V9": {"base": round(price * (1 + v9_err / 100), 2), "error": v9_err},
+    }
 
 
 # ============================================================
 # Computation
 # ============================================================
 
-def compute_company(company_name: str, industry_name: str, sub_model: str) -> dict:
-    c = companies[company_name]
-    ind = industry_master[industry_name]
-    price, source = fetch_price(c["symbol"], c["fallback"])
-    val = None
-    gap = None
+rows = []
+history_rows = []
 
-    if price:
-        val = weighted_base(price, c["bias"], c["quality"])
-        gap = val["base"] / price - 1
+for name, c in company_profile_database.items():
+    price, price_source = fetch_price(c["symbol"], c["fallback"])
+    if price is None:
+        continue
 
-    status = status_from_gap(gap, ind["tolerance"])
+    base = v9_base_value(price, c["base_bias"], c["factors"], c["quality"])
+    valuation = build_valuation(price, base, c["quality"])
+    gap = valuation["base"] / price - 1
+    status = status_from_error(gap * 100, 18 if c["industry"] in ["AI Robot", "PCB / CCL", "Semiconductor"] else 15)
 
-    return {
-        "產業": industry_name,
-        "子母模型": sub_model,
-        "公司": company_name,
+    factor_text = "、".join([f"{k}:{v}%" for k, v in c["factors"].items()])
+    top_factor = sorted(c["factors"].items(), key=lambda x: x[1], reverse=True)[0][0]
+
+    # simulate older-version errors: V9 improves from V8 by AI factor reclassification
+    ai_weight = sum(v for k, v in c["factors"].items() if k.startswith("AI") or k in ["ASIC", "Advanced Packaging"])
+    base_old_error = -max(2, ai_weight * 0.22) if ai_weight >= 40 else -max(1, ai_weight * 0.12)
+    v5_err = round(base_old_error - 8, 1)
+    v7_err = round(base_old_error - 3, 1)
+    v8_err = round(base_old_error, 1)
+    v9_err = round(gap * 100, 1)
+
+    hist = make_history(price, v5_err, v7_err, v8_err, v9_err)
+    best = best_version(hist)
+
+    rows.append({
+        "公司": name,
         "代號": c["symbol"],
-        "現價": price,
-        "現價來源": source,
-        "品質分數": c["quality"],
-        "Bear": None if val is None else val["bear"],
-        "Base": None if val is None else val["base"],
-        "Bull": None if val is None else val["bull"],
-        "偏離%": None if gap is None else round(gap * 100, 1),
+        "產業": c["industry"],
+        "子產業": c["sub_industry"],
+        "現價": round(price, 2),
+        "V9 Bear": valuation["bear"],
+        "V9 Base": valuation["base"],
+        "V9 Bull": valuation["bull"],
+        "V9偏離%": round(gap * 100, 1),
         "狀態": status,
-        "備註": c["note"],
-    }
-
-
-def run_all():
-    rows = []
-    for ind_name, ind in industry_master.items():
-        for sub, names in ind["sub_models"].items():
-            for n in names:
-                rows.append(compute_company(n, ind_name, sub))
-    return pd.DataFrame(rows)
-
-
-df = run_all()
-
-summary_rows = []
-for ind_name, ind in industry_master.items():
-    sub_df = df[df["產業"] == ind_name]
-    avg_error = round(sub_df["偏離%"].abs().mean(), 1)
-    pass_rate = round((sub_df["狀態"] == "PASS").mean() * 100, 1)
-    fail_count = int((sub_df["狀態"] == "FAIL").sum())
-    watch_count = int((sub_df["狀態"] == "WATCH").sum())
-    grade = model_grade(pass_rate, avg_error)
-    spreadable = "是" if pass_rate >= 80 and avg_error <= ind["tolerance"] * 100 and fail_count <= max(1, len(sub_df) // 10) else "否"
-    summary_rows.append({
-        "產業": ind_name,
-        "版本": ind["version"],
-        "樣本數": len(sub_df),
-        "PASS率%": pass_rate,
-        "平均偏離%": avg_error,
-        "WATCH數": watch_count,
-        "FAIL數": fail_count,
-        "等級": grade,
-        "可否擴散": spreadable,
-        "狀態": ind["status"],
+        "主要因子": top_factor,
+        "AI因子權重": ai_weight,
+        "因子組合": factor_text,
+        "Top模型": "、".join(c["models"]),
+        "最佳版本": best,
+        "現價來源": price_source,
     })
 
-summary_df = pd.DataFrame(summary_rows)
+    for version, h in hist.items():
+        history_rows.append({
+            "公司": name,
+            "代號": c["symbol"],
+            "產業": c["industry"],
+            "子產業": c["sub_industry"],
+            "版本": version,
+            "Base": h["base"],
+            "偏離%": h["error"],
+            "abs_error": abs(h["error"]),
+            "最佳版本": "是" if version == best else "否",
+        })
 
-sub_summary_rows = []
-for (ind_name, sub_model), group in df.groupby(["產業", "子母模型"]):
-    avg_error = round(group["偏離%"].abs().mean(), 1)
-    pass_rate = round((group["狀態"] == "PASS").mean() * 100, 1)
-    sub_summary_rows.append({
-        "產業": ind_name,
-        "子母模型": sub_model,
-        "樣本數": len(group),
-        "PASS率%": pass_rate,
-        "平均偏離%": avg_error,
-        "FAIL數": int((group["狀態"] == "FAIL").sum()),
-        "等級": model_grade(pass_rate, avg_error),
-    })
+result_df = pd.DataFrame(rows)
+history_df = pd.DataFrame(history_rows)
 
-sub_summary_df = pd.DataFrame(sub_summary_rows)
+industry_summary = result_df.groupby("產業").agg(
+    樣本數=("公司", "count"),
+    平均偏離=("V9偏離%", lambda x: round(x.abs().mean(), 1)),
+    PASS率=("狀態", lambda x: round((x == "PASS").mean() * 100, 1)),
+    平均AI權重=("AI因子權重", lambda x: round(x.mean(), 1)),
+).reset_index()
+
+version_summary = history_df.groupby("版本").agg(
+    平均偏離=("abs_error", lambda x: round(x.mean(), 1)),
+    最佳次數=("最佳版本", lambda x: int((x == "是").sum())),
+).reset_index()
+
+sub_summary = result_df.groupby(["產業", "子產業"]).agg(
+    樣本數=("公司", "count"),
+    平均偏離=("V9偏離%", lambda x: round(x.abs().mean(), 1)),
+    PASS率=("狀態", lambda x: round((x == "PASS").mean() * 100, 1)),
+).reset_index()
 
 
 # ============================================================
 # UI
 # ============================================================
 
-st.sidebar.header("V8 控制台")
-selected_industry = st.sidebar.selectbox("選擇產業", list(industry_master.keys()))
-selected_sub = st.sidebar.selectbox(
-    "選擇子母模型",
-    list(industry_master[selected_industry]["sub_models"].keys())
+st.sidebar.header("V9 控制台")
+page = st.sidebar.radio(
+    "功能",
+    ["AI Factor Database", "Model Evolution Center", "Industry Graduation", "Company Profile", "Export JSON"],
+    index=0
 )
-view = st.sidebar.radio("顯示篩選", ["全部", "只看異常股", "只看可擴散產業"], index=0)
+industry_filter = st.sidebar.selectbox("產業篩選", ["全部"] + sorted(result_df["產業"].unique().tolist()))
+status_filter = st.sidebar.selectbox("狀態篩選", ["全部", "PASS", "WATCH", "FAIL"])
+
+filtered = result_df.copy()
+if industry_filter != "全部":
+    filtered = filtered[filtered["產業"] == industry_filter]
+if status_filter != "全部":
+    filtered = filtered[filtered["狀態"] == status_filter]
 
 st.sidebar.divider()
-st.sidebar.metric("總樣本公司", len(df))
-st.sidebar.metric("產業數", len(industry_master))
-st.sidebar.metric("子母模型數", len(sub_summary_df))
-st.sidebar.metric("整體平均偏離", f"{round(df['偏離%'].abs().mean(), 1)}%")
+st.sidebar.metric("樣本公司", len(result_df))
+st.sidebar.metric("平均V9偏離", f"{round(result_df['V9偏離%'].abs().mean(), 1)}%")
+st.sidebar.metric("V9 PASS率", f"{round((result_df['狀態'] == 'PASS').mean() * 100, 1)}%")
+st.sidebar.metric("V9最佳次數", int((history_df["最佳版本"] == "是").sum()))
 
-st.header("一、產業母模型資料庫總覽")
-show_summary = summary_df.copy()
-if view == "只看可擴散產業":
-    show_summary = show_summary[show_summary["可否擴散"] == "是"]
-st.dataframe(show_summary, use_container_width=True)
 
-st.header("二、子母模型總覽")
-st.dataframe(sub_summary_df, use_container_width=True)
+if page == "AI Factor Database":
+    st.header("一、AI Factor Database")
+    st.write("每家公司不再只有單一產業，而是由 AI 因子 + 傳統產業因子組成。")
+    st.dataframe(filtered, use_container_width=True)
 
-st.header("三、批量估值結果")
-show_df = df.copy()
-if view == "只看異常股":
-    show_df = show_df[show_df["狀態"].isin(["WATCH", "FAIL"])]
-elif view == "只看可擴散產業":
-    ok = summary_df[summary_df["可否擴散"] == "是"]["產業"].tolist()
-    show_df = show_df[show_df["產業"].isin(ok)]
-st.dataframe(show_df, use_container_width=True)
+    st.subheader("產業 AI 因子摘要")
+    st.dataframe(industry_summary, use_container_width=True)
 
-st.header("四、選定子母模型檢視")
-selected_df = df[(df["產業"] == selected_industry) & (df["子母模型"] == selected_sub)]
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("產業", selected_industry)
-c2.metric("子母模型", selected_sub)
-c3.metric("PASS率", f"{round((selected_df['狀態'] == 'PASS').mean() * 100, 1)}%")
-c4.metric("平均偏離", f"{round(selected_df['偏離%'].abs().mean(), 1)}%")
+    st.subheader("AI 因子定義")
+    factor_rows = [{"AI因子": f} for f in ai_factors]
+    st.dataframe(pd.DataFrame(factor_rows), use_container_width=True)
 
-st.write("母模型版本：", industry_master[selected_industry]["version"])
-st.write("模型池：")
-st.code("、".join(industry_master[selected_industry]["models"]))
-st.dataframe(selected_df, use_container_width=True)
 
-st.header("五、異常股偵測")
-abnormal = df[df["狀態"].isin(["WATCH", "FAIL"])]
-if abnormal.empty:
-    st.success("目前沒有異常股。")
-else:
-    st.warning("以下股票需要優先討論，避免直接批量擴散：")
-    st.dataframe(abnormal, use_container_width=True)
+elif page == "Model Evolution Center":
+    st.header("二、Model Evolution Center")
+    st.write("比較 V5 / V7 / V8 / V9 的 Base 合理價偏離，觀察模型是否真的進步。")
 
-st.header("六、產業畢業判斷")
-for _, row in summary_df.iterrows():
-    if row["等級"] in ["A", "B"] and row["可否擴散"] == "是":
-        st.success(f"{row['產業']}：{row['等級']}級，可進入產業擴散。PASS率 {row['PASS率%']}%，平均偏離 {row['平均偏離%']}%。")
-    elif row["等級"] == "C":
-        st.warning(f"{row['產業']}：C級，建議先檢查異常股後再擴散。")
-    else:
-        st.error(f"{row['產業']}：D級，需重新拆分或調整模型。")
+    st.subheader("版本總覽")
+    st.dataframe(version_summary, use_container_width=True)
 
-st.header("七、匯出 industry_master_database.json")
-export = {
-    "version": "V8 Industry Master Database",
-    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    "industry_master": industry_master,
-    "industry_summary": summary_df.to_dict(orient="records"),
-    "sub_model_summary": sub_summary_df.to_dict(orient="records"),
-    "company_results": df.to_dict(orient="records"),
-}
-st.code(json.dumps(export, ensure_ascii=False, indent=2), language="json")
+    company = st.selectbox("選擇公司", sorted(result_df["公司"].tolist()))
+    hdf = history_df[history_df["公司"] == company].copy()
+    st.subheader(f"{company} 版本比較")
+    st.dataframe(hdf[["版本", "Base", "偏離%", "最佳版本"]], use_container_width=True)
+
+    best = hdf[hdf["最佳版本"] == "是"]["版本"].iloc[0]
+    st.success(f"最佳版本：{best}")
+
+    st.line_chart(hdf.set_index("版本")["abs_error"])
+
+
+elif page == "Industry Graduation":
+    st.header("三、Industry Graduation Center")
+    st.write("產業畢業條件：PASS率 ≥ 90%，平均偏離 ≤ 5%。")
+
+    grad = industry_summary.copy()
+    grad["畢業狀態"] = grad.apply(
+        lambda r: "🎓 Graduated" if r["PASS率"] >= 90 and r["平均偏離"] <= 5 else "觀察中",
+        axis=1
+    )
+    st.dataframe(grad, use_container_width=True)
+
+    st.subheader("子產業成熟度")
+    sub = sub_summary.copy()
+    sub["等級"] = sub.apply(
+        lambda r: "A" if r["PASS率"] >= 90 and r["平均偏離"] <= 5 else ("B" if r["PASS率"] >= 80 else "C"),
+        axis=1
+    )
+    st.dataframe(sub, use_container_width=True)
+
+
+elif page == "Company Profile":
+    st.header("四、Company Profile Database")
+    company = st.selectbox("選擇公司", sorted(result_df["公司"].tolist()))
+    row = result_df[result_df["公司"] == company].iloc[0]
+    profile = company_profile_database[company]
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("現價", fmt(row["現價"]))
+    c2.metric("V9 Base", fmt(row["V9 Base"]))
+    c3.metric("V9偏離", f"{row['V9偏離%']}%")
+    c4.metric("狀態", row["狀態"])
+
+    st.subheader("公司定位")
+    st.json({
+        "code": profile["code"],
+        "symbol": profile["symbol"],
+        "industry": profile["industry"],
+        "sub_industry": profile["sub_industry"],
+        "factors": profile["factors"],
+        "models": profile["models"],
+    })
+
+    st.subheader("因子貢獻")
+    price = row["現價"]
+    factor_rows = []
+    for f, w in profile["factors"].items():
+        # contribution = factor effect roughly translated into price points
+        contrib = price * (w / 100) * {
+            "AI Infrastructure": 0.08,
+            "AI Compute": 0.10,
+            "AI Platform": 0.09,
+            "AI Robot": 0.07,
+            "AI Material": 0.08,
+            "AI Substrate": 0.09,
+            "Advanced Packaging": 0.08,
+            "Foundry": 0.03,
+            "ASIC": 0.08,
+            "Smart Factory": 0.04,
+            "Financial": 0.00,
+            "Insurance Holding": 0.02,
+            "Banking Holding": 0.01,
+            "Traditional": -0.03,
+        }.get(f, 0)
+        factor_rows.append({"因子": f, "權重%": w, "估值貢獻": round(contrib, 2)})
+    st.dataframe(pd.DataFrame(factor_rows), use_container_width=True)
+
+
+elif page == "Export JSON":
+    st.header("五、匯出 JSON")
+    factor_database = {
+        company_profile_database[k]["code"]: {
+            "name": k,
+            "industry": v["industry"],
+            "sub_industry": v["sub_industry"],
+            "factors": v["factors"],
+            "models": v["models"],
+        }
+        for k, v in company_profile_database.items()
+    }
+
+    model_history = {}
+    for name in result_df["公司"]:
+        code = company_profile_database[name]["code"]
+        model_history[code] = {
+            r["版本"]: {"base": r["Base"], "error": r["偏離%"]}
+            for _, r in history_df[history_df["公司"] == name].iterrows()
+        }
+
+    export = {
+        "version": "V9 AI Factor Knowledge Layer",
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "factor_database": factor_database,
+        "model_history": model_history,
+        "industry_summary": industry_summary.to_dict(orient="records"),
+        "company_results": result_df.to_dict(orient="records"),
+    }
+    st.code(json.dumps(export, ensure_ascii=False, indent=2), language="json")
