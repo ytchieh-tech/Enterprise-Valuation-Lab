@@ -1,38 +1,105 @@
 import streamlit as st
+import pandas as pd
 
 st.set_page_config(
     page_title="Enterprise Valuation Lab",
-    page_icon="🏛",
+    page_icon="🏛️",
     layout="wide"
 )
 
-st.title("🏛 Enterprise Valuation Lab")
-st.subheader("企業評價模型研究院")
+st.title("🏛️ Enterprise Valuation Lab")
+st.subheader("Model Fit Engine V1")
 
-st.info("這個平台專門負責模型驗證與淘汰，不影響主平台速度。")
+st.info("先驗證公司特徵是否能正確選出適用模型")
 
-menu = st.sidebar.radio(
-    "功能",
-    [
-        "首頁",
-        "財報資料庫",
-        "模型競技場",
-        "模型淘汰中心",
-        "模型池資料庫"
-    ]
+companies = {
+    "2330 台積電": {
+        "ROE":"高",
+        "FCF":"強",
+        "EPS_CAGR":"高",
+        "Debt":"低",
+        "models":[
+            "DCF-FCFF",
+            "EVA",
+            "EBO"
+        ]
+    },
+
+    "2308 台達電": {
+        "ROE":"高",
+        "FCF":"穩定",
+        "EPS_CAGR":"中高",
+        "Debt":"低",
+        "models":[
+            "EVA",
+            "PB-ROE",
+            "Quality Compounder"
+        ]
+    },
+
+    "2603 長榮": {
+        "ROE":"波動",
+        "FCF":"波動",
+        "EPS_CAGR":"循環",
+        "Debt":"中",
+        "models":[
+            "EV/EBITDA",
+            "FCF Yield",
+            "Cycle PE"
+        ]
+    },
+
+    "2881 富邦金": {
+        "ROE":"穩定",
+        "FCF":"失真",
+        "EPS_CAGR":"中",
+        "Debt":"金融業",
+        "models":[
+            "PB-ROE",
+            "Dividend Yield",
+            "Residual Income"
+        ]
+    }
+}
+
+stock = st.selectbox(
+    "選擇測試公司",
+    list(companies.keys())
 )
 
-if menu == "首頁":
-    st.success("Valuation Lab 啟動成功")
+data = companies[stock]
 
-elif menu == "財報資料庫":
-    st.write("財報中心")
+st.header("公司特徵")
 
-elif menu == "模型競技場":
-    st.write("31模型競技場")
+col1,col2,col3,col4 = st.columns(4)
 
-elif menu == "模型淘汰中心":
-    st.write("Model Elimination Engine")
+col1.metric("ROE",data["ROE"])
+col2.metric("FCF",data["FCF"])
+col3.metric("EPS CAGR",data["EPS_CAGR"])
+col4.metric("負債",data["Debt"])
 
-elif menu == "模型池資料庫":
-    st.write("Model Survival Database")
+st.header("適用模型")
+
+for model in data["models"]:
+    st.success(f"✓ {model}")
+
+st.header("淘汰模型")
+
+all_models = [
+    "DCF-FCFF",
+    "DCF-FCFE",
+    "EVA",
+    "EBO",
+    "PB-ROE",
+    "Dividend Yield",
+    "Residual Income",
+    "EV/EBITDA",
+    "FCF Yield",
+    "Cycle PE",
+    "AI Premium"
+]
+
+removed = [x for x in all_models if x not in data["models"]]
+
+for model in removed:
+    st.error(f"✗ {model}")
