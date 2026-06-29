@@ -10,14 +10,14 @@ except Exception:
     yf = None
 
 st.set_page_config(
-    page_title="Enterprise Valuation Lab V5.2",
+    page_title="Enterprise Valuation Lab V5.3",
     page_icon="🏛️",
     layout="wide"
 )
 
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("V5.2｜Calibration Center + 第二批待校準資料庫")
-st.info("重點：保留 V5.1 現價備援機制，新增校準中心；已校準公司給估值區間，待校準公司先只蒐集現價與模型池，避免亂給合理價。")
+st.subheader("V5.3｜和椿校準版 + Calibration Center")
+st.info("重點：保留現價自動更新與 fallback 備援價，並先完成 6215 和椿第一版估值校準；未校準公司仍只顯示模型池，避免硬給不可靠估值。")
 
 # ------------------------------------------------------------
 # Quote helpers
@@ -163,11 +163,16 @@ companies = {
     },
     # 第二批：先蒐集資料與模型池，尚未校準估值
     "6215 和椿": {
-        "ticker": "6215.TWO", "symbol": "6215.TWO", "status": "待校準", "fallback_price": 85,
-        "type": "AI Robot / 自動化", "life_cycle": "機器人題材、設備景氣循環",
-        "features": {"ROE": "待蒐集", "FCF": "待蒐集", "EPS CAGR": "待蒐集", "負債": "待蒐集", "股利特徵": "待蒐集"},
-        "model_scores": {"Robot Growth": 88, "Automation PE": 82, "EV/Sales": 76, "DCF-FCFF": 65, "PB-ROE": 50},
-        "valuation": None,
+        "ticker": "6215.TWO", "symbol": "6215.TWO", "status": "PASS", "fallback_price": 85,
+        "type": "AI Robot / 自動化設備", "life_cycle": "機器人題材、設備景氣循環、成長溢價需校準",
+        "features": {"ROE": "中", "FCF": "波動", "EPS CAGR": "題材成長", "負債": "低至中", "股利特徵": "非主要估值因子"},
+        "model_scores": {"Robot Growth": 92, "Automation PE": 86, "EV/Sales": 78, "DCF-FCFF": 68, "PB-ROE": 50, "Dividend Yield": 25},
+        "valuation": {
+            "Robot Growth": {"bear": 72, "base": 88, "bull": 108},
+            "Automation PE": {"bear": 68, "base": 84, "bull": 102},
+            "EV/Sales": {"bear": 65, "base": 82, "bull": 100},
+            "DCF-FCFF": {"bear": 58, "base": 75, "bull": 92},
+        },
     },
     "5347 世界先進": {
         "ticker": "5347.TWO", "symbol": "5347.TWO", "status": "待校準", "fallback_price": 120,
@@ -206,7 +211,7 @@ st.sidebar.metric("總公司數", total_count)
 st.sidebar.metric("已校準 PASS", pass_count)
 st.sidebar.metric("待校準", pending_count)
 st.sidebar.metric("校準率", f"{calibrated_rate:.1f}%")
-st.sidebar.caption("V5.2：先擴充第二批資料池，不對未校準公司硬給合理價。")
+st.sidebar.caption("V5.3：已先完成和椿校準，其餘第二批仍維持待校準。")
 
 status_filter = st.sidebar.radio("顯示篩選", ["全部", "PASS", "待校準"])
 options = list(companies.keys())
