@@ -10,68 +10,54 @@ except Exception:
     yf = None
 
 st.set_page_config(
-    page_title="Enterprise Valuation Lab V5.1",
+    page_title="Enterprise Valuation Lab V5.2",
     page_icon="🏛️",
     layout="wide"
 )
 
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("V5.1｜資料蒐集 + 現價自動更新 + 備援現價 Fallback")
-st.info("重點：現價先用 yfinance 自動更新；若抓不到，改用 fallback_price 備援價並明確標示來源，避免 N/A 影響估值驗證。")
+st.subheader("V5.2｜Calibration Center + 第二批待校準資料庫")
+st.info("重點：保留 V5.1 現價備援機制，新增校準中心；已校準公司給估值區間，待校準公司先只蒐集現價與模型池，避免亂給合理價。")
 
 # ------------------------------------------------------------
-# Helper functions
+# Quote helpers
 # ------------------------------------------------------------
-
-@st.cache_data(ttl=900)
-def fetch_quote_auto(ticker: str):
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_quote(ticker: str):
     """Fetch latest price from yfinance. TTL 15 minutes."""
     if yf is None:
         return None, "yfinance 未安裝"
-    try:
-        t = yf.Ticker(ticker)
-        fast = getattr(t, "fast_info", {}) or {}
-        price = None
-        if isinstance(fast, dict):
+
+    candidates = [ticker]
+    if ticker.endswith(".TW"):
+        candidates.append(ticker.replace(".TW", ".TWO"))
+    elif ticker.endswith(".TWO"):
+        candidates.append(ticker.replace(".TWO", ".TW"))
+
+    for tk in candidates:
+        try:
+            t = yf.Ticker(tk)
+            fast = getattr(t, "fast_info", {}) or {}
             price = fast.get("last_price") or fast.get("lastPrice")
-        else:
-            price = getattr(fast, "last_price", None) or getattr(fast, "lastPrice", None)
-        if price is None:
-            hist = t.history(period="5d", interval="1d")
-            if not hist.empty:
-                close = hist["Close"].dropna()
-                if not close.empty:
-                    price = float(close.iloc[-1])
-        if price is None:
-            return None, "抓不到現價"
-        return float(price), f"yfinance 自動更新：{ticker}"
-    except Exception as e:
-        return None, f"yfinance 抓取失敗：{ticker}｜{e}"
+            if price is None:
+                hist = t.history(period="5d", interval="1d")
+                if hist is not None and not hist.empty:
+                    price = float(hist["Close"].dropna().iloc[-1])
+            if price is not None and float(price) > 0:
+                return float(price), f"yfinance 自動更新｜{tk}"
+        except Exception:
+            continue
+    return None, "抓不到現價"
 
 
-def alt_tickers(ticker: str):
-    """Taiwan tickers sometimes fail on .TW or .TWO; try the alternative suffix."""
-    items = [ticker]
-    if ticker.endswith(".TWO"):
-        items.append(ticker.replace(".TWO", ".TW"))
-    elif ticker.endswith(".TW"):
-        items.append(ticker.replace(".TW", ".TWO"))
-    return list(dict.fromkeys(items))
-
-
-def fetch_quote(company: dict):
-    """Auto quote first, then fallback_price. Returns price and source note."""
-    ticker = company.get("symbol", "")
-    notes = []
-    for tk in alt_tickers(ticker):
-        price, note = fetch_quote_auto(tk)
-        notes.append(note)
-        if price is not None:
-            return price, note
+def get_price(company: dict):
+    price, source = fetch_quote(company["ticker"])
+    if price is not None:
+        return price, source
     fallback = company.get("fallback_price")
     if fallback is not None:
-        return float(fallback), "fallback 手動備援價（自動抓價失敗）"
-    return None, "自動與備援皆無法取得｜" + "；".join(notes)
+        return float(fallback), "fallback 手動備援價"
+    return None, "N/A"
 
 
 def rating(score: float) -> str:
@@ -88,7 +74,7 @@ def rating(score: float) -> str:
 
 def weighted_valuation(company: dict, top_n: int = 3):
     scores = company.get("model_scores", {})
-    vals = company.get("valuation", {})
+    vals = company.get("valuation", {}) or {}
     candidates = []
     for m, v in vals.items():
         s = scores.get(m, 0)
@@ -121,240 +107,230 @@ def calibration_result(price, fair):
         return "待校準", None
     gap = (fair["base"] / price - 1) * 100
     abs_gap = abs(gap)
-    if abs_gap <= 15:
+    if abs_gap <= 10:
         return "PASS", gap
-    if abs_gap <= 30:
+    if abs_gap <= 15:
         return "WATCH", gap
     return "FAIL", gap
 
 # ------------------------------------------------------------
 # Company database
-# first 4 calibrated; others are model-selection/data-collection only
 # ------------------------------------------------------------
-
 companies = {
     "2330 台積電": {
-        "symbol": "2330.TW",
-        "fallback_price": 2340,
-        "type": "AI半導體 / 晶圓代工龍頭",
-        "life_cycle": "高資本支出、高ROIC、AI成長溢價",
-        "status": "已校準",
-        "features": {"ROE": "高", "FCF": "強但受資本支出影響", "EPS CAGR": "高", "負債": "低", "股利特徵": "穩定"},
-        "model_scores": {"DCF-FCFF": 94, "EVA": 90, "AI Premium": 86, "EBO": 78, "EV/EBITDA": 74, "PB-ROE": 48, "Dividend Yield": 35, "Cycle PE": 20},
-        "valuation": {"DCF-FCFF": {"bear": 1750, "base": 2100, "bull": 2450}, "EVA": {"bear": 1650, "base": 2050, "bull": 2400}, "AI Premium": {"bear": 2050, "base": 2480, "bull": 2850}, "EBO": {"bear": 1550, "base": 1900, "bull": 2250}, "EV/EBITDA": {"bear": 1700, "base": 2150, "bull": 2550}},
+        "ticker": "2330.TW", "symbol": "2330.TW", "status": "PASS", "fallback_price": 2340,
+        "type": "AI半導體 / 晶圓代工龍頭", "life_cycle": "高資本支出、高ROIC、AI成長溢價",
+        "features": {"ROE": "高", "FCF": "強但受資本支出影響", "EPS CAGR": "高", "負債": "低", "股利特徵": "穩定但非高殖利率"},
+        "model_scores": {"Quality Compounder": 96, "AI Infrastructure Premium": 92, "EVA": 90, "DCF-FCFF": 86, "EBO": 78, "EV/EBITDA": 74},
+        "valuation": {
+            "Quality Compounder": {"bear": 1900, "base": 2200, "bull": 2550},
+            "AI Infrastructure Premium": {"bear": 2050, "base": 2480, "bull": 2850},
+            "EVA": {"bear": 1650, "base": 2050, "bull": 2400},
+        },
     },
     "2308 台達電": {
-        "symbol": "2308.TW",
-        "fallback_price": 1900,
-        "type": "AI Infrastructure Compounder / 電源、散熱、工業自動化",
-        "life_cycle": "AI電力基建與品質複利企業",
-        "status": "已校準",
+        "ticker": "2308.TW", "symbol": "2308.TW", "status": "PASS", "fallback_price": 1900,
+        "type": "AI Infrastructure Compounder / 電源與資料中心基建", "life_cycle": "AI電力基建、高品質複利企業",
         "features": {"ROE": "高且穩定", "FCF": "穩定", "EPS CAGR": "中高", "負債": "低", "股利特徵": "穩定配息"},
-        "model_scores": {"Quality Compounder": 96, "AI Infrastructure Premium": 94, "EVA": 88, "DCF-FCFF": 82, "Residual Income": 72, "PB-ROE": 58, "EV/EBITDA": 55, "Cycle PE": 18},
-        "valuation": {"Quality Compounder": {"bear": 1650, "base": 1900, "bull": 2250}, "AI Infrastructure Premium": {"bear": 1700, "base": 2000, "bull": 2400}, "EVA": {"bear": 1350, "base": 1650, "bull": 2050}, "DCF-FCFF": {"bear": 1250, "base": 1550, "bull": 1900}, "Residual Income": {"bear": 1100, "base": 1400, "bull": 1700}},
+        "model_scores": {"Quality Compounder": 96, "AI Infrastructure Premium": 92, "EVA": 90, "DCF-FCFF": 82, "Residual Income": 76, "PB-ROE": 68},
+        "valuation": {
+            "Quality Compounder": {"bear": 1650, "base": 1900, "bull": 2200},
+            "AI Infrastructure Premium": {"bear": 1700, "base": 1950, "bull": 2300},
+            "EVA": {"bear": 1500, "base": 1700, "bull": 2000},
+        },
     },
     "2603 長榮": {
-        "symbol": "2603.TW",
-        "fallback_price": 182,
-        "type": "航運循環股",
-        "life_cycle": "景氣循環、獲利波動、運價敏感",
-        "status": "已校準",
-        "features": {"ROE": "波動", "FCF": "波動", "EPS CAGR": "循環", "負債": "中", "股利特徵": "高波動"},
-        "model_scores": {"EV/EBITDA": 94, "Cycle PE": 90, "FCF Yield": 82, "Asset Value": 76, "PB-ROE": 35, "Residual Income": 32, "DCF-FCFF": 28, "AI Premium": 5},
-        "valuation": {"EV/EBITDA": {"bear": 150, "base": 195, "bull": 250}, "Cycle PE": {"bear": 145, "base": 185, "bull": 235}, "FCF Yield": {"bear": 140, "base": 180, "bull": 225}, "Asset Value": {"bear": 135, "base": 170, "bull": 215}},
+        "ticker": "2603.TW", "symbol": "2603.TW", "status": "PASS", "fallback_price": 182,
+        "type": "航運循環股", "life_cycle": "景氣循環、獲利波動、運價敏感",
+        "features": {"ROE": "波動", "FCF": "波動", "EPS CAGR": "循環", "負債": "中", "股利特徵": "高波動股利"},
+        "model_scores": {"EV/EBITDA": 94, "Cycle PE": 90, "FCF Yield": 82, "Asset Value": 76, "PB-ROE": 35},
+        "valuation": {
+            "EV/EBITDA": {"bear": 155, "base": 190, "bull": 230},
+            "Cycle PE": {"bear": 150, "base": 180, "bull": 215},
+            "FCF Yield": {"bear": 150, "base": 190, "bull": 225},
+        },
     },
     "2881 富邦金": {
-        "symbol": "2881.TW",
-        "fallback_price": 130,
-        "type": "金融金控",
-        "life_cycle": "金融資產股、ROE與股利主導估值",
-        "status": "已校準",
+        "ticker": "2881.TW", "symbol": "2881.TW", "status": "PASS", "fallback_price": 130,
+        "type": "金融金控", "life_cycle": "金融資產股、ROE與股利主導估值",
         "features": {"ROE": "穩定", "FCF": "金融業不適用", "EPS CAGR": "中", "負債": "金融業特殊結構", "股利特徵": "重要估值因子"},
-        "model_scores": {"PB-ROE": 96, "Residual Income": 91, "Dividend Yield": 85, "PE": 66, "DCF-FCFF": 10, "EV/EBITDA": 5, "AI Premium": 0, "Cycle PE": 20},
-        "valuation": {"PB-ROE": {"bear": 110, "base": 132, "bull": 155}, "Residual Income": {"bear": 105, "base": 128, "bull": 150}, "Dividend Yield": {"bear": 100, "base": 122, "bull": 145}, "PE": {"bear": 98, "base": 118, "bull": 140}},
+        "model_scores": {"PB-ROE": 96, "Residual Income": 91, "Dividend Yield": 85, "PE": 66, "DCF-FCFF": 10},
+        "valuation": {
+            "PB-ROE": {"bear": 112, "base": 132, "bull": 150},
+            "Residual Income": {"bear": 108, "base": 128, "bull": 146},
+            "Dividend Yield": {"bear": 105, "base": 122, "bull": 140},
+        },
     },
-    "2303 聯電": {
-        "symbol": "2303.TW",
-        "fallback_price": 45, "type": "成熟半導體 / 晶圓代工", "life_cycle": "成熟製程、景氣循環中低", "status": "待校準",
-        "features": {"ROE": "中", "FCF": "中", "EPS CAGR": "低~中", "負債": "低", "股利特徵": "中高"},
-        "model_scores": {"PB-ROE": 86, "EV/EBITDA": 82, "EBO": 78, "Dividend Yield": 72, "DCF-FCFF": 70, "AI Premium": 25, "Cycle PE": 62},
-        "valuation": {},
+    # 第二批：先蒐集資料與模型池，尚未校準估值
+    "6215 和椿": {
+        "ticker": "6215.TWO", "symbol": "6215.TWO", "status": "待校準", "fallback_price": 85,
+        "type": "AI Robot / 自動化", "life_cycle": "機器人題材、設備景氣循環",
+        "features": {"ROE": "待蒐集", "FCF": "待蒐集", "EPS CAGR": "待蒐集", "負債": "待蒐集", "股利特徵": "待蒐集"},
+        "model_scores": {"Robot Growth": 88, "Automation PE": 82, "EV/Sales": 76, "DCF-FCFF": 65, "PB-ROE": 50},
+        "valuation": None,
     },
     "5347 世界先進": {
-        "symbol": "5347.TWO",
-        "fallback_price": 105, "type": "成熟半導體 / 特殊製程", "life_cycle": "成熟製程、股利與循環並重", "status": "待校準",
-        "features": {"ROE": "中", "FCF": "中", "EPS CAGR": "低~中", "負債": "低", "股利特徵": "重要"},
-        "model_scores": {"PB-ROE": 86, "EV/EBITDA": 82, "Dividend Yield": 78, "EBO": 74, "DCF-FCFF": 68, "AI Premium": 20, "Cycle PE": 62},
-        "valuation": {},
+        "ticker": "5347.TWO", "symbol": "5347.TWO", "status": "待校準", "fallback_price": 120,
+        "type": "成熟製程晶圓代工", "life_cycle": "成熟製程、景氣循環、特殊製程需求",
+        "features": {"ROE": "待蒐集", "FCF": "待蒐集", "EPS CAGR": "待蒐集", "負債": "待蒐集", "股利特徵": "待蒐集"},
+        "model_scores": {"DCF-FCFF": 86, "EVA": 82, "EBO": 78, "PB-ROE": 72, "EV/EBITDA": 70},
+        "valuation": None,
     },
-    "2382 廣達": {
-        "symbol": "2382.TW",
-        "fallback_price": 280, "type": "AI伺服器 / ODM", "life_cycle": "AI伺服器成長，毛利率較低但營收彈性高", "status": "待校準",
-        "features": {"ROE": "高", "FCF": "中", "EPS CAGR": "高", "負債": "中低", "股利特徵": "中"},
-        "model_scores": {"AI Server Cycle": 94, "EV/EBITDA": 88, "PE": 84, "AI Premium": 78, "DCF-FCFF": 70, "PB-ROE": 55},
-        "valuation": {},
+    "2303 聯電": {
+        "ticker": "2303.TW", "symbol": "2303.TW", "status": "待校準", "fallback_price": 48,
+        "type": "成熟製程晶圓代工", "life_cycle": "成熟製程、景氣循環、股利與淨值支撐",
+        "features": {"ROE": "待蒐集", "FCF": "待蒐集", "EPS CAGR": "待蒐集", "負債": "待蒐集", "股利特徵": "待蒐集"},
+        "model_scores": {"PB-ROE": 84, "Dividend Yield": 78, "DCF-FCFF": 76, "EBO": 72, "EV/EBITDA": 70},
+        "valuation": None,
     },
-    "3231 緯創": {
-        "symbol": "3231.TW",
-        "fallback_price": 125, "type": "AI伺服器 / ODM", "life_cycle": "AI伺服器成長但波動較高", "status": "待校準",
-        "features": {"ROE": "中高", "FCF": "波動", "EPS CAGR": "高", "負債": "中", "股利特徵": "中"},
-        "model_scores": {"AI Server Cycle": 92, "EV/EBITDA": 86, "PE": 82, "AI Premium": 76, "Cycle PE": 70, "DCF-FCFF": 58},
-        "valuation": {},
-    },
-    "6215 和椿": {
-        "symbol": "6215.TWO",
-        "fallback_price": 85, "type": "自動化設備 / 中小型成長股", "life_cycle": "工業自動化與設備需求循環", "status": "待校準",
-        "features": {"ROE": "中", "FCF": "波動", "EPS CAGR": "中高", "負債": "低~中", "股利特徵": "中"},
-        "model_scores": {"Quality Compounder": 82, "PE": 78, "EV/EBITDA": 74, "DCF-FCFF": 70, "PB-ROE": 65, "Cycle PE": 58},
-        "valuation": {},
-    },
-    "2606 裕民": {
-        "symbol": "2606.TW",
-        "fallback_price": 55, "type": "散裝航運循環股", "life_cycle": "景氣循環、運價與船隊資產主導", "status": "待校準",
-        "features": {"ROE": "波動", "FCF": "波動", "EPS CAGR": "循環", "負債": "中", "股利特徵": "高波動"},
-        "model_scores": {"EV/EBITDA": 92, "Cycle PE": 88, "Asset Value": 82, "FCF Yield": 78, "PB-ROE": 38, "DCF-FCFF": 25},
-        "valuation": {},
-    },
-    "2882 國泰金": {
-        "symbol": "2882.TW",
-        "fallback_price": 70, "type": "金融金控", "life_cycle": "壽險資產重估與股利主導", "status": "待校準",
-        "features": {"ROE": "中高", "FCF": "金融業不適用", "EPS CAGR": "中", "負債": "金融業特殊結構", "股利特徵": "重要"},
-        "model_scores": {"PB-ROE": 94, "Residual Income": 90, "Dividend Yield": 84, "PE": 68, "EBO": 62, "DCF-FCFF": 8},
-        "valuation": {},
-    },
-    "2891 中信金": {
-        "symbol": "2891.TW",
-        "fallback_price": 42, "type": "金融金控", "life_cycle": "銀行獲利與股利穩定性主導", "status": "待校準",
-        "features": {"ROE": "穩定", "FCF": "金融業不適用", "EPS CAGR": "中", "負債": "金融業特殊結構", "股利特徵": "重要"},
-        "model_scores": {"PB-ROE": 94, "Residual Income": 88, "Dividend Yield": 86, "PE": 70, "EBO": 62, "DCF-FCFF": 8},
-        "valuation": {},
+    "2383 台光電": {
+        "ticker": "2383.TW", "symbol": "2383.TW", "status": "待校準", "fallback_price": 1300,
+        "type": "AI PCB / 高階CCL", "life_cycle": "AI伺服器高速材料、成長溢價",
+        "features": {"ROE": "待蒐集", "FCF": "待蒐集", "EPS CAGR": "待蒐集", "負債": "待蒐集", "股利特徵": "待蒐集"},
+        "model_scores": {"AI Premium": 90, "Quality Compounder": 84, "DCF-FCFF": 78, "EV/EBITDA": 76, "EVA": 72},
+        "valuation": None,
     },
 }
 
 # ------------------------------------------------------------
-# Sidebar
+# Sidebar calibration center
 # ------------------------------------------------------------
+st.sidebar.header("Calibration Center")
+pass_count = sum(1 for c in companies.values() if c.get("status") == "PASS")
+watch_count = sum(1 for c in companies.values() if c.get("status") == "WATCH")
+pending_count = sum(1 for c in companies.values() if c.get("status") == "待校準")
+total_count = len(companies)
+calibrated_rate = pass_count / total_count * 100 if total_count else 0
 
-st.sidebar.title("功能")
-mode = st.sidebar.radio("模式", ["單股檢視", "12家公司資料總覽"])
+st.sidebar.metric("總公司數", total_count)
+st.sidebar.metric("已校準 PASS", pass_count)
+st.sidebar.metric("待校準", pending_count)
+st.sidebar.metric("校準率", f"{calibrated_rate:.1f}%")
+st.sidebar.caption("V5.2：先擴充第二批資料池，不對未校準公司硬給合理價。")
 
-if mode == "12家公司資料總覽":
-    rows = []
-    for name, c in companies.items():
-        price, note = fetch_quote(c)
-        fair, weights = weighted_valuation(c)
-        cal, gap = calibration_result(price, fair)
-        rows.append({
-            "公司": name,
-            "Ticker": c["symbol"],
-            "類型": c["type"],
-            "狀態": c["status"],
-            "現價": None if price is None else round(price, 2),
-            "現價來源": note,
-            "Top模型": " / ".join([m for m, _, _ in weights]) if weights else "待建立估值區間",
-            "Base合理價": None if fair is None else round(fair["base"], 2),
-            "誤差%": None if gap is None else round(gap, 2),
-            "校準": cal,
-        })
-    st.header("12 家公司資料總覽")
-    st.dataframe(pd.DataFrame(rows), use_container_width=True)
-    st.caption("待校準公司目前只完成模型池與現價蒐集，尚未產生 Bear/Base/Bull 估值。")
-    st.stop()
+status_filter = st.sidebar.radio("顯示篩選", ["全部", "PASS", "待校準"])
+options = list(companies.keys())
+if status_filter != "全部":
+    options = [k for k, v in companies.items() if v.get("status") == status_filter]
 
-stock = st.selectbox("選擇公司", list(companies.keys()))
+stock = st.selectbox("選擇公司", options)
 company = companies[stock]
-
-live_price, price_note = fetch_quote(company)
-if live_price is None:
-    st.warning(f"現價未成功自動更新：{price_note}")
-
+price, price_source = get_price(company)
 valuation_result, weights = weighted_valuation(company, top_n=3)
-calibration, gap = calibration_result(live_price, valuation_result)
+cal_status, gap = calibration_result(price, valuation_result)
 
 st.divider()
+
+# ------------------------------------------------------------
+# Main display
+# ------------------------------------------------------------
 st.header("一、公司定位")
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("股票代號", company["symbol"])
 c2.metric("公司類型", company["type"])
-c3.metric("資料狀態", company["status"])
-c4.metric("現價", "N/A" if live_price is None else f"{live_price:.2f}")
-st.caption(f"現價狀態：{price_note}｜更新時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+c3.metric("生命週期", company["life_cycle"])
+c4.metric("校準狀態", company.get("status", "待校準"))
 
-st.header("二、公司特徵")
+st.header("二、現價更新")
+p1, p2 = st.columns(2)
+p1.metric("現價", "N/A" if price is None else f"{price:,.2f}")
+p2.metric("現價來源", price_source)
+
+st.header("三、公司特徵")
 feature_cols = st.columns(len(company["features"]))
 for col, (k, v) in zip(feature_cols, company["features"].items()):
     col.metric(k, v)
 
-st.header("三、模型適配分數")
+st.header("四、模型適配分數")
 score_df = pd.DataFrame([
     {"模型": m, "適配分數": s, "評級": rating(s)}
     for m, s in sorted(company["model_scores"].items(), key=lambda x: x[1], reverse=True)
 ])
 st.dataframe(score_df, use_container_width=True)
 
-st.header("四、保留 Top 模型")
+st.header("五、保留 Top 模型")
 if weights:
     cols = st.columns(len(weights))
     for col, (m, s, w) in zip(cols, weights):
         col.success(f"{m}\n\n分數 {s}｜權重 {w:.1%}")
 else:
-    st.warning("目前只完成模型池，尚未建立估值區間；請先蒐集 EPS、BVPS、FCF、EBITDA、股利等資料後校準。")
+    top_candidates = list(sorted(company["model_scores"].items(), key=lambda x: x[1], reverse=True))[:3]
+    cols = st.columns(len(top_candidates))
+    for col, (m, s) in zip(cols, top_candidates):
+        col.warning(f"{m}\n\n分數 {s}｜待校準")
 
-st.header("五、各模型估值區間")
-valuation_rows = []
-for m, v in company.get("valuation", {}).items():
-    valuation_rows.append({
-        "模型": m,
-        "適配分數": company["model_scores"].get(m, 0),
-        "Bear 保守價": v["bear"],
-        "Base 合理價": v["base"],
-        "Bull 樂觀價": v["bull"],
-        "是否納入": "是" if any(m == x[0] for x in weights) else "否"
-    })
-if valuation_rows:
-    st.dataframe(pd.DataFrame(valuation_rows), use_container_width=True)
-else:
-    st.info("此公司尚未建立估值區間，先完成現價與模型池蒐集。")
-
-st.header("六、綜合估值區間")
+st.header("六、估值區間")
 if valuation_result:
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Bear 保守價", f"{valuation_result['bear']:.0f}")
-    c2.metric("Base 合理價", f"{valuation_result['base']:.0f}")
-    c3.metric("Bull 樂觀價", f"{valuation_result['bull']:.0f}")
-    c4.metric("現價", "N/A" if live_price is None else f"{live_price:.0f}")
+    v1, v2, v3, v4 = st.columns(4)
+    v1.metric("Bear 保守價", f"{valuation_result['bear']:,.0f}")
+    v2.metric("Base 合理價", f"{valuation_result['base']:,.0f}")
+    v3.metric("Bull 樂觀價", f"{valuation_result['bull']:,.0f}")
+    v4.metric("校準結果", cal_status)
 
-    verdict = judge_price(live_price, valuation_result)
-    st.subheader(f"判斷：{verdict}")
+    verdict = judge_price(price, valuation_result)
+    st.subheader(f"價格判斷：{verdict}")
     if gap is not None:
         st.write(f"Base 合理價相對現價差距：{gap:.1f}%")
-        if calibration == "PASS":
-            st.success("校準結果：PASS｜Base合理價與現價差距在 ±15% 內。")
-        elif calibration == "WATCH":
-            st.warning("校準結果：WATCH｜偏離 15%~30%，需要檢查權重或估值區間。")
-        else:
-            st.error("校準結果：FAIL｜偏離超過 30%，需重新校準模型權重或估值基準。")
-else:
-    st.info("尚無綜合估值區間。")
+    if cal_status == "PASS":
+        st.success("校準通過：合理價與現價差距在可接受範圍內。")
+    elif cal_status == "WATCH":
+        st.warning("觀察：合理價與現價略有偏離，後續需微調權重。")
+    else:
+        st.error("FAIL：合理價與現價偏離過大，需要重新校準。")
 
-st.header("七、匯出給主平台 JSON")
-export_data = {
-    company["symbol"]: {
-        "name": stock,
-        "type": company["type"],
-        "status": company["status"],
-        "selected_models": [m for m, _, _ in weights],
-        "weights": {m: round(w, 4) for m, _, w in weights},
+    valuation_rows = []
+    for m, v in company.get("valuation", {}).items():
+        valuation_rows.append({
+            "模型": m,
+            "適配分數": company["model_scores"].get(m, 0),
+            "Bear": v["bear"],
+            "Base": v["base"],
+            "Bull": v["bull"],
+            "是否納入": "是" if any(m == x[0] for x in weights) else "否",
+        })
+    st.dataframe(pd.DataFrame(valuation_rows), use_container_width=True)
+else:
+    st.warning("此公司目前為『待校準』：已建立模型池與現價蒐集，但尚未建立 Bear/Base/Bull 估值區間。")
+
+st.header("七、校準總表")
+summary_rows = []
+for name, comp in companies.items():
+    p, src = get_price(comp)
+    fair, ws = weighted_valuation(comp, top_n=3)
+    status, g = calibration_result(p, fair)
+    summary_rows.append({
+        "公司": name,
+        "代號": comp["symbol"],
+        "類型": comp["type"],
+        "資料狀態": comp.get("status", "待校準"),
+        "現價": None if p is None else round(p, 2),
+        "Base合理價": None if fair is None else round(fair["base"], 2),
+        "偏離%": None if g is None else round(g, 1),
+        "校準結果": status,
+        "現價來源": src,
+    })
+st.dataframe(pd.DataFrame(summary_rows), use_container_width=True)
+
+st.header("八、匯出給主平台 JSON")
+export_data = {}
+for name, comp in companies.items():
+    p, src = get_price(comp)
+    fair, ws = weighted_valuation(comp, top_n=3)
+    export_data[comp["symbol"]] = {
+        "name": name,
+        "type": comp["type"],
+        "status": comp.get("status", "待校準"),
+        "selected_models": [m for m, _, _ in ws] if ws else [m for m, _ in sorted(comp["model_scores"].items(), key=lambda x: x[1], reverse=True)[:3]],
+        "weights": {m: round(w, 4) for m, _, w in ws} if ws else None,
         "valuation": {
-            "bear": round(valuation_result["bear"], 2) if valuation_result else None,
-            "base": round(valuation_result["base"], 2) if valuation_result else None,
-            "bull": round(valuation_result["bull"], 2) if valuation_result else None,
-        } if valuation_result else None,
-        "current_price": None if live_price is None else round(live_price, 2),
-        "price_source": price_note,
-        "calibration": calibration,
-        "gap_percent": None if gap is None else round(gap, 2),
-        "judgement": judge_price(live_price, valuation_result) if valuation_result else "待校準",
+            "bear": round(fair["bear"], 2),
+            "base": round(fair["base"], 2),
+            "bull": round(fair["bull"], 2),
+        } if fair else None,
+        "current_price": p,
+        "price_source": src,
+        "judgement": judge_price(p, fair) if fair else "待校準",
     }
-}
 st.code(json.dumps(export_data, ensure_ascii=False, indent=2), language="json")
+
+st.caption(f"最後更新時間：{datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
