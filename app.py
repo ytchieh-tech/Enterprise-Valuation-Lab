@@ -3,278 +3,259 @@ import pandas as pd
 import json
 
 st.set_page_config(
-    page_title="Enterprise Valuation Lab",
+    page_title="Enterprise Valuation Lab V4",
     page_icon="🏛️",
     layout="wide"
 )
 
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("Model Selection Engine V3｜企業分類器 + 模型適配器")
-st.info("V3 先用四家公司測試：先判斷企業類型，再依企業特徵挑選 Top 3 模型。")
+st.subheader("V4｜模型適配 + 綜合估值區間 Bear / Base / Bull")
+st.info("先用四家公司驗證：台積電、台達電、長榮、富邦金。重點是先確認模型選擇與估值區間是否合理。")
 
-# =========================
-# 1. 測試公司資料
-# =========================
 companies = {
     "2330 台積電": {
-        "type": "AI半導體龍頭",
-        "industry": "Semiconductor",
-        "ROE": 22,
-        "FCF": 1200,
-        "Growth": 18,
-        "Debt": 12,
-        "Cycle": "低",
-        "Dividend": "中",
-        "Quality": "高",
-        "note": "高ROE、高FCF、高成長、低負債，屬AI半導體核心資產。"
+        "symbol": "2330.TW",
+        "type": "AI半導體 / 晶圓代工龍頭",
+        "life_cycle": "高資本支出、高ROIC、AI成長溢價",
+        "features": {
+            "ROE": "高",
+            "FCF": "強但受資本支出影響",
+            "EPS CAGR": "高",
+            "負債": "低",
+            "股利特徵": "穩定但非高殖利率"
+        },
+        "model_scores": {
+            "DCF-FCFF": 94,
+            "EVA": 90,
+            "AI Premium": 86,
+            "EBO": 78,
+            "EV/EBITDA": 74,
+            "PB-ROE": 48,
+            "Dividend Yield": 35,
+            "Cycle PE": 20
+        },
+        "valuation": {
+            "DCF-FCFF": {"bear": 1750, "base": 2100, "bull": 2450},
+            "EVA": {"bear": 1650, "base": 2050, "bull": 2400},
+            "AI Premium": {"bear": 2050, "base": 2480, "bull": 2850},
+            "EBO": {"bear": 1550, "base": 1900, "bull": 2250},
+            "EV/EBITDA": {"bear": 1700, "base": 2150, "bull": 2550}
+        },
+        "current_price": 2340
     },
     "2308 台達電": {
-        "type": "Quality Compounder",
-        "industry": "Industrial / Power / Automation",
-        "ROE": 16,
-        "FCF": 450,
-        "Growth": 10,
-        "Debt": 15,
-        "Cycle": "中低",
-        "Dividend": "中",
-        "Quality": "高",
-        "note": "穩定現金流、品質複利、工業自動化與資料中心電源受惠。"
+        "symbol": "2308.TW",
+        "type": "Quality Compounder / 電源與工業自動化",
+        "life_cycle": "穩定成長、高品質複利企業",
+        "features": {
+            "ROE": "高且穩定",
+            "FCF": "穩定",
+            "EPS CAGR": "中高",
+            "負債": "低",
+            "股利特徵": "穩定配息"
+        },
+        "model_scores": {
+            "EVA": 93,
+            "Quality Compounder": 89,
+            "DCF-FCFF": 82,
+            "Residual Income": 76,
+            "PB-ROE": 68,
+            "AI Premium": 42,
+            "Cycle PE": 18,
+            "EV/EBITDA": 55
+        },
+        "valuation": {
+            "EVA": {"bear": 390, "base": 460, "bull": 540},
+            "Quality Compounder": {"bear": 410, "base": 490, "bull": 580},
+            "DCF-FCFF": {"bear": 370, "base": 445, "bull": 520},
+            "Residual Income": {"bear": 360, "base": 430, "bull": 500},
+            "PB-ROE": {"bear": 340, "base": 410, "bull": 480}
+        },
+        "current_price": 430
     },
     "2603 長榮": {
-        "type": "景氣循環股",
-        "industry": "Shipping",
-        "ROE": 12,
-        "FCF": -300,
-        "Growth": 5,
-        "Debt": 40,
-        "Cycle": "高",
-        "Dividend": "高波動",
-        "Quality": "循環",
-        "note": "航運獲利高度循環，EPS/ROE容易失真，優先採循環與EV/EBITDA模型。"
+        "symbol": "2603.TW",
+        "type": "航運循環股",
+        "life_cycle": "景氣循環、獲利波動、運價敏感",
+        "features": {
+            "ROE": "波動",
+            "FCF": "波動",
+            "EPS CAGR": "循環",
+            "負債": "中",
+            "股利特徵": "高波動股利"
+        },
+        "model_scores": {
+            "EV/EBITDA": 94,
+            "Cycle PE": 90,
+            "FCF Yield": 82,
+            "Asset Value": 76,
+            "PB-ROE": 35,
+            "Residual Income": 32,
+            "DCF-FCFF": 28,
+            "AI Premium": 5
+        },
+        "valuation": {
+            "EV/EBITDA": {"bear": 180, "base": 240, "bull": 320},
+            "Cycle PE": {"bear": 170, "base": 230, "bull": 300},
+            "FCF Yield": {"bear": 160, "base": 220, "bull": 290},
+            "Asset Value": {"bear": 150, "base": 210, "bull": 280}
+        },
+        "current_price": 220
     },
     "2881 富邦金": {
-        "type": "金融控股",
-        "industry": "Financial",
-        "ROE": 11,
-        "FCF": 0,
-        "Growth": 8,
-        "Debt": 0,
-        "Cycle": "金融循環",
-        "Dividend": "穩定",
-        "Quality": "穩定",
-        "note": "金融業FCF與EV/EBITDA不適用，以PB-ROE、剩餘收益、股利模型為主。"
+        "symbol": "2881.TW",
+        "type": "金融金控",
+        "life_cycle": "金融資產股、ROE與股利主導估值",
+        "features": {
+            "ROE": "穩定",
+            "FCF": "金融業不適用",
+            "EPS CAGR": "中",
+            "負債": "金融業特殊結構",
+            "股利特徵": "重要估值因子"
+        },
+        "model_scores": {
+            "PB-ROE": 96,
+            "Residual Income": 91,
+            "Dividend Yield": 85,
+            "PE": 66,
+            "DCF-FCFF": 10,
+            "EV/EBITDA": 5,
+            "AI Premium": 0,
+            "Cycle PE": 20
+        },
+        "valuation": {
+            "PB-ROE": {"bear": 82, "base": 98, "bull": 115},
+            "Residual Income": {"bear": 80, "base": 95, "bull": 112},
+            "Dividend Yield": {"bear": 75, "base": 90, "bull": 105},
+            "PE": {"bear": 78, "base": 92, "bull": 108}
+        },
+        "current_price": 95
     }
 }
 
-# =========================
-# 2. 模型池
-# =========================
-all_models = [
-    "DCF-FCFF",
-    "DCF-FCFE",
-    "EVA",
-    "EBO",
-    "PB-ROE",
-    "Residual Income",
-    "EV/EBITDA",
-    "Dividend Yield",
-    "Cycle PE",
-    "Asset Value",
-    "Quality Compounder",
-    "AI Premium"
-]
 
-# 企業類型模型基礎權重：先決定「哪些模型應該參賽」
-type_model_weight = {
-    "AI半導體龍頭": {
-        "DCF-FCFF": 35,
-        "EVA": 30,
-        "EBO": 25,
-        "AI Premium": 18,
-        "EV/EBITDA": 12,
-        "DCF-FCFE": 10,
-        "PB-ROE": -10,
-        "Dividend Yield": -20,
-        "Cycle PE": -30,
-    },
-    "Quality Compounder": {
-        "EVA": 35,
-        "Quality Compounder": 32,
-        "DCF-FCFF": 26,
-        "Residual Income": 22,
-        "PB-ROE": 18,
-        "EBO": 15,
-        "DCF-FCFE": 8,
-        "Cycle PE": -25,
-        "AI Premium": -10,
-    },
-    "景氣循環股": {
-        "EV/EBITDA": 35,
-        "Cycle PE": 32,
-        "FCF Yield": 25,  # 顯示用，稍後會轉入模型池外加
-        "Asset Value": 20,
-        "DCF-FCFF": 5,
-        "PB-ROE": -25,
-        "Residual Income": -25,
-        "EVA": -20,
-        "EBO": -20,
-        "AI Premium": -40,
-    },
-    "金融控股": {
-        "PB-ROE": 40,
-        "Residual Income": 35,
-        "Dividend Yield": 28,
-        "EBO": 10,
-        "DCF-FCFF": -40,
-        "DCF-FCFE": -35,
-        "EV/EBITDA": -40,
-        "AI Premium": -50,
-        "Cycle PE": -25,
-    }
-}
-
-# 確保 Cycle 類模型有 FCF Yield
-if "FCF Yield" not in all_models:
-    all_models.append("FCF Yield")
-
-# =========================
-# 3. 適配分數函數
-# =========================
-def calculate_scores(data):
-    score = {m: 0 for m in all_models}
-
-    # Step A：企業類型基礎權重
-    base = type_model_weight.get(data["type"], {})
-    for m, w in base.items():
-        if m in score:
-            score[m] += w
-
-    # Step B：財務特徵修正
-    roe = data["ROE"]
-    fcf = data["FCF"]
-    growth = data["Growth"]
-    debt = data["Debt"]
-    company_type = data["type"]
-
-    # ROE：高品質企業加 EVA / RI / PB-ROE
-    if roe >= 15:
-        score["EVA"] += 8
-        score["Residual Income"] += 6
-        score["PB-ROE"] += 4
-    elif roe < 8:
-        score["PB-ROE"] -= 8
-        score["EVA"] -= 8
-
-    # FCF：現金流穩定才提高DCF；循環股不讓DCF過度勝出
-    if fcf > 0:
-        score["DCF-FCFF"] += 8
-        score["DCF-FCFE"] += 4
-        if company_type == "Quality Compounder":
-            score["Quality Compounder"] += 6
-    else:
-        score["DCF-FCFF"] -= 8
-        score["DCF-FCFE"] -= 8
-        score["EV/EBITDA"] += 6
-        score["Cycle PE"] += 4
-
-    # 成長：高成長提高 DCF/EVA，但金融與航運不採AI Premium
-    if growth >= 15:
-        score["DCF-FCFF"] += 6
-        score["EVA"] += 6
-        if company_type == "AI半導體龍頭":
-            score["AI Premium"] += 10
-    elif growth <= 5:
-        score["Cycle PE"] += 8
-        score["EV/EBITDA"] += 4
-
-    # 負債：高負債或循環產業提高 EV/EBITDA、Asset Value
-    if debt >= 35:
-        score["EV/EBITDA"] += 8
-        score["Asset Value"] += 5
-        score["DCF-FCFE"] -= 8
-
-    # Step C：硬性排除／懲罰，避免不適用模型混入Top3
-    if company_type == "金融控股":
-        for m in ["DCF-FCFF", "DCF-FCFE", "EV/EBITDA", "AI Premium", "Cycle PE"]:
-            score[m] -= 80
-
-    if company_type == "景氣循環股":
-        for m in ["PB-ROE", "Residual Income", "EVA", "EBO", "AI Premium", "Quality Compounder"]:
-            score[m] -= 50
-
-    if company_type == "Quality Compounder":
-        for m in ["AI Premium", "Cycle PE", "Asset Value"]:
-            score[m] -= 30
-
-    if company_type == "AI半導體龍頭":
-        for m in ["Cycle PE", "Asset Value", "Dividend Yield"]:
-            score[m] -= 40
-
-    return dict(sorted(score.items(), key=lambda x: x[1], reverse=True))
+def rating(score: float) -> str:
+    if score >= 90:
+        return "S 核心模型"
+    if score >= 80:
+        return "A 強烈推薦"
+    if score >= 70:
+        return "B 可用"
+    if score >= 60:
+        return "C 觀察"
+    return "D 不建議 / 淘汰"
 
 
-def status(score):
-    if score >= 40:
-        return "核心模型"
-    if score >= 25:
-        return "可用模型"
-    if score >= 10:
-        return "觀察模型"
-    return "淘汰/不適用"
+def weighted_valuation(company: dict, top_n: int = 3):
+    scores = company["model_scores"]
+    vals = company["valuation"]
+    candidates = []
+    for m, v in vals.items():
+        s = scores.get(m, 0)
+        if s >= 60:
+            candidates.append((m, s, v))
+    candidates = sorted(candidates, key=lambda x: x[1], reverse=True)[:top_n]
+    total_score = sum(s for _, s, _ in candidates)
+    if total_score == 0 or not candidates:
+        return None, []
+    result = {}
+    for case in ["bear", "base", "bull"]:
+        result[case] = sum(v[case] * s for _, s, v in candidates) / total_score
+    weights = [(m, s, s / total_score) for m, s, _ in candidates]
+    return result, weights
 
-# =========================
-# 4. UI
-# =========================
-stock = st.selectbox("選擇測試公司", list(companies.keys()))
-data = companies[stock]
+
+def judge_price(price, fair):
+    if fair is None:
+        return "無法判斷"
+    bear, base, bull = fair["bear"], fair["base"], fair["bull"]
+    if price < bear:
+        return "低估區"
+    if price <= bull:
+        return "合理區間"
+    return "高估區"
+
+stock = st.selectbox("選擇公司", list(companies.keys()))
+company = companies[stock]
 
 st.divider()
-st.header("一、企業分類")
 
+st.header("一、公司定位")
 c1, c2, c3 = st.columns(3)
-c1.metric("企業類型", data["type"])
-c2.metric("產業", data["industry"])
-c3.metric("品質特徵", data["Quality"])
-st.caption(data["note"])
+c1.metric("股票代號", company["symbol"])
+c2.metric("公司類型", company["type"])
+c3.metric("生命週期", company["life_cycle"])
 
-st.header("二、公司核心特徵")
+st.header("二、公司特徵")
+feature_cols = st.columns(len(company["features"]))
+for col, (k, v) in zip(feature_cols, company["features"].items()):
+    col.metric(k, v)
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("ROE", data["ROE"])
-c2.metric("FCF", data["FCF"])
-c3.metric("Growth", data["Growth"])
-c4.metric("Debt", data["Debt"])
-c5.metric("Cycle", data["Cycle"])
-c6.metric("Dividend", data["Dividend"])
-
-scores = calculate_scores(data)
-ranking = pd.DataFrame([
-    {"模型": m, "適配分數": s, "狀態": status(s)}
-    for m, s in scores.items()
+st.header("三、模型適配分數")
+score_df = pd.DataFrame([
+    {"模型": m, "適配分數": s, "評級": rating(s)}
+    for m, s in sorted(company["model_scores"].items(), key=lambda x: x[1], reverse=True)
 ])
+st.dataframe(score_df, use_container_width=True)
 
-selected = ranking[ranking["適配分數"] >= 25].head(3)
-if len(selected) < 3:
-    selected = ranking.head(3)
+st.header("四、保留 Top 模型")
+valuation_result, weights = weighted_valuation(company, top_n=3)
 
-st.header("三、推薦 Top 3 模型")
-for _, row in selected.iterrows():
-    st.success(f"✓ {row['模型']}｜適配分數 {row['適配分數']}｜{row['狀態']}")
+if weights:
+    cols = st.columns(len(weights))
+    for col, (m, s, w) in zip(cols, weights):
+        col.success(f"{m}\n\n分數 {s}｜權重 {w:.1%}")
+else:
+    st.error("目前沒有足夠適配模型可產生估值")
 
-st.header("四、完整模型排名")
-st.dataframe(ranking, use_container_width=True)
+st.header("五、各模型估值區間")
+valuation_rows = []
+for m, v in company["valuation"].items():
+    valuation_rows.append({
+        "模型": m,
+        "適配分數": company["model_scores"].get(m, 0),
+        "Bear 保守價": v["bear"],
+        "Base 合理價": v["base"],
+        "Bull 樂觀價": v["bull"],
+        "是否納入": "是" if any(m == x[0] for x in weights) else "否"
+    })
+st.dataframe(pd.DataFrame(valuation_rows), use_container_width=True)
 
-st.header("五、匯出給主平台的模型池")
+st.header("六、綜合估值區間")
+if valuation_result:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Bear 保守價", f"{valuation_result['bear']:.0f}")
+    c2.metric("Base 合理價", f"{valuation_result['base']:.0f}")
+    c3.metric("Bull 樂觀價", f"{valuation_result['bull']:.0f}")
+    c4.metric("現價", f"{company['current_price']:.0f}")
+
+    verdict = judge_price(company["current_price"], valuation_result)
+    gap = (valuation_result["base"] / company["current_price"] - 1) * 100
+    st.subheader(f"判斷：{verdict}")
+    st.write(f"Base 合理價相對現價差距：{gap:.1f}%")
+
+    if verdict == "低估區":
+        st.success("現價低於保守價，屬於低估區。")
+    elif verdict == "合理區間":
+        st.info("現價落在 Bear～Bull 區間內，屬於合理區間。")
+    else:
+        st.warning("現價高於樂觀價，需留意估值偏高。")
+
+st.header("七、匯出給主平台 JSON")
 export_data = {
-    stock.split()[0]: {
-        "company": stock,
-        "type": data["type"],
-        "selected_models": selected["模型"].tolist(),
-        "scores": {row["模型"]: int(row["適配分數"]) for _, row in ranking.iterrows()},
-        "note": data["note"]
+    company["symbol"]: {
+        "name": stock,
+        "type": company["type"],
+        "selected_models": [m for m, _, _ in weights],
+        "weights": {m: round(w, 4) for m, _, w in weights},
+        "valuation": {
+            "bear": round(valuation_result["bear"], 2) if valuation_result else None,
+            "base": round(valuation_result["base"], 2) if valuation_result else None,
+            "bull": round(valuation_result["bull"], 2) if valuation_result else None,
+        } if valuation_result else None,
+        "current_price": company["current_price"],
+        "judgement": judge_price(company["current_price"], valuation_result) if valuation_result else None,
     }
 }
 
-st.json(export_data)
-
-st.caption("V3 Beta：目前先驗證四家公司；確認模型選擇合理後，再加入估值區間與更多公司。")
+st.code(json.dumps(export_data, ensure_ascii=False, indent=2), language="json")
