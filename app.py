@@ -63,6 +63,10 @@ def concentration(scores):
     if not v: return 0
     top=v[0]; second=v[1] if len(v)>1 else 0; third=v[2] if len(v)>2 else 0
     return round(max(0,min(100,top*.75+(top-second)*.45-third*.15)),1)
+
+def identity_confidence(ids):
+    # V12.9：只回答「主身份是否清楚」，不與 Coherence 混在一起
+    return concentration(ids)
 def coherence(ids):
     items=list(ids.items())[:5]
     if len(items)<=1: return 90
