@@ -7,10 +7,10 @@ try:
 except Exception:
     yf=None
 
-st.set_page_config(page_title='Enterprise Valuation Lab V13.2', page_icon='🏛️', layout='wide')
+st.set_page_config(page_title='Enterprise Valuation Lab V13.2.1', page_icon='🏛️', layout='wide')
 st.title('🏛️ Enterprise Valuation Lab')
-st.subheader('V13.2｜Blind CID Test Engine 盲測版')
-st.info('V13.2 將標準答案與系統預測分離：系統先只看財報/產業因子自行判斷 CID 身份、成熟度與模型，最後才與 Benchmark 標準答案比對。')
+st.subheader('V13.2.1｜Blind CID Test + Error Analysis Center')
+st.info('V13.2.1 新增 Error Analysis Center：找出 CID、成熟度、模型選擇錯誤來源，讓下一版可以針對錯誤公司校準。')
 
 @st.cache_data(ttl=900)
 def fetch_price(symbol, fallback=None):
@@ -202,7 +202,7 @@ summary=pd.DataFrame([
 category_summary=df.groupby('類別').agg(公司數=('公司','count'),CID_PASS率=('CID身份驗證',lambda x:round((x=='PASS').mean()*100,1)),模型_PASS率=('模型驗證',lambda x:round((x=='PASS').mean()*100,1)),平均Reliability=('CID Reliability','mean')).reset_index()
 category_summary['平均Reliability']=category_summary['平均Reliability'].round(1)
 
-st.sidebar.header('V13.2 Blind Test 控制台')
+st.sidebar.header('V13.2.1 Error Analysis 控制台')
 page=st.sidebar.radio('功能',['Blind Test Overview','Blind Factor Layer','CID Prediction','Validation Center','Category Summary','Company Detail','Export JSON'])
 selected_company=st.sidebar.selectbox('選擇公司',df['公司'].tolist())
 st.sidebar.divider(); st.sidebar.metric('樣本公司',len(df)); st.sidebar.metric('CID PASS率',f"{round((df['CID身份驗證']=='PASS').mean()*100,1)}%"); st.sidebar.metric('模型PASS率',f"{round((df['模型驗證']=='PASS').mean()*100,1)}%")
