@@ -12,17 +12,18 @@ except Exception:
 
 
 st.set_page_config(
-    page_title="Enterprise Valuation Lab V15.0 Beta",
+    page_title="Enterprise Valuation Lab V15.0.1",
     page_icon="🏛️",
     layout="wide",
 )
 
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("V15.0 Beta｜Intrinsic Value Benchmark Test")
+st.subheader("V15.0.1｜Multiplier Calibration Engine 倍率校正引擎")
 st.info(
-    "本版用來驗證我們的討論是否正確：CID + Model Selector + Intrinsic Value 是否比單純 PE/PB 更符合企業本質。"
-    "重點不是追求最終目標價，而是比較「傳統估值」與「智策估值」的合理性。"
+    "本版延續 V15.0 Beta：不修正 CID、不修正 Model Selector，"
+    "只針對不同 CID 的估值倍率尺度做校正，驗證 Fair Zone 是否改善。"
 )
+
 
 # ============================================================
 # Core Benchmark 10
@@ -102,6 +103,98 @@ COMPANIES = [
 ]
 
 
+# ============================================================
+# CID Calibration Library
+# ============================================================
+
+CALIBRATION_LIBRARY = {
+    "AI Infrastructure": {
+        "Base Multiplier": 1.25,
+        "Growth Premium": 1.10,
+        "ROIC Premium": 1.20,
+        "CAP Premium": 1.15,
+        "Reason": "AI基礎建設龍頭，高ROIC、高FCF與長競爭優勢期間需提高尺度。"
+    },
+    "AI Platform": {
+        "Base Multiplier": 1.35,
+        "Growth Premium": 1.10,
+        "ROIC Premium": 1.20,
+        "CAP Premium": 1.15,
+        "Reason": "平台型半導體具高ROIC與高現金流，V15.0原始倍率偏保守。"
+    },
+    "Advanced Materials": {
+        "Base Multiplier": 1.75,
+        "Growth Premium": 1.35,
+        "ROIC Premium": 1.10,
+        "CAP Premium": 1.20,
+        "Reason": "AI材料具高度成長溢價，需補上Growth Premium Layer。"
+    },
+    "AI Server Platform": {
+        "Base Multiplier": 1.10,
+        "Growth Premium": 1.05,
+        "ROIC Premium": 1.05,
+        "CAP Premium": 1.05,
+        "Reason": "AI伺服器平台仍偏製造/組裝，校正幅度較小。"
+    },
+    "Thermal Solution": {
+        "Base Multiplier": 1.30,
+        "Growth Premium": 1.20,
+        "ROIC Premium": 1.15,
+        "CAP Premium": 1.10,
+        "Reason": "散熱族群受AI伺服器需求拉動，高ROIC公司需要成長溢價。"
+    },
+    "Intelligent Automation": {
+        "Base Multiplier": 1.20,
+        "Growth Premium": 1.10,
+        "ROIC Premium": 1.05,
+        "CAP Premium": 1.05,
+        "Reason": "自動化與機器人仍屬早期成長，溢價存在但需保守。"
+    },
+    "Memory Cycle": {
+        "Base Multiplier": 1.00,
+        "Growth Premium": 1.00,
+        "ROIC Premium": 1.00,
+        "CAP Premium": 1.00,
+        "Reason": "記憶體以週期為主，暫不做成長倍率校正。"
+    },
+    "Financial Franchise": {
+        "Base Multiplier": 1.00,
+        "Growth Premium": 1.00,
+        "ROIC Premium": 1.00,
+        "CAP Premium": 1.00,
+        "Reason": "金融股主要由PB-ROE、EBO與股利折現決定，暫不額外校正。"
+    },
+    "Shipping Cycle": {
+        "Base Multiplier": 1.00,
+        "Growth Premium": 1.00,
+        "ROIC Premium": 1.00,
+        "CAP Premium": 1.00,
+        "Reason": "航運以景氣循環、運價與資產價值決定，暫不額外校正。"
+    },
+    "Telecom Infrastructure": {
+        "Base Multiplier": 1.00,
+        "Growth Premium": 1.00,
+        "ROIC Premium": 1.00,
+        "CAP Premium": 1.00,
+        "Reason": "電信穩定現金流以DCF與股利折現為主，暫不額外校正。"
+    },
+}
+
+
+MODEL_WEIGHTS = {
+    "AI Infrastructure": {"DCF": 0.25, "FCFF": 0.20, "ROIC Premium": 0.25, "CAP": 0.30},
+    "AI Platform": {"DCF": 0.25, "FCFE": 0.20, "ROIC Premium": 0.25, "CAP": 0.30},
+    "Advanced Materials": {"DCF": 0.20, "FCFF": 0.20, "ROIC Premium": 0.25, "CAP": 0.35},
+    "AI Server Platform": {"DCF": 0.25, "FCFF": 0.25, "ROIC Premium": 0.20, "CAP": 0.30},
+    "Thermal Solution": {"DCF": 0.25, "FCFF": 0.20, "ROIC Premium": 0.30, "CAP": 0.25},
+    "Intelligent Automation": {"DCF": 0.25, "FCFF": 0.20, "EVA": 0.20, "ROIC Premium": 0.20, "CAP": 0.15},
+    "Memory Cycle": {"Cycle PE": 0.35, "EV/EBITDA": 0.25, "Asset Value": 0.30, "EBO": 0.10},
+    "Financial Franchise": {"PB Asset": 0.30, "EBO": 0.30, "Dividend": 0.25, "EVA": 0.15},
+    "Shipping Cycle": {"Cycle PE": 0.30, "EV/EBITDA": 0.30, "Asset Value": 0.30, "Dividend": 0.10},
+    "Telecom Infrastructure": {"DCF": 0.25, "FCFE": 0.15, "EBO": 0.20, "Dividend": 0.40},
+}
+
+
 @st.cache_data(ttl=900)
 def fetch_price(symbol, fallback):
     if yf:
@@ -118,50 +211,6 @@ def fetch_price(symbol, fallback):
         except Exception:
             pass
     return fallback, "fallback"
-
-
-# ============================================================
-# Traditional Valuation: PE/PB simple
-# ============================================================
-
-TRAD_MULTIPLES = {
-    "AI Infrastructure": {"pe": 38, "pb": 9.5},
-    "AI Platform": {"pe": 42, "pb": 8.0},
-    "Advanced Materials": {"pe": 55, "pb": 12.0},
-    "AI Server Platform": {"pe": 26, "pb": 5.5},
-    "Thermal Solution": {"pe": 34, "pb": 10.0},
-    "Intelligent Automation": {"pe": 24, "pb": 3.0},
-    "Memory Cycle": {"pe": 18, "pb": 1.8},
-    "Financial Franchise": {"pe": 12, "pb": 1.7},
-    "Shipping Cycle": {"pe": 7, "pb": 0.8},
-    "Telecom Infrastructure": {"pe": 24, "pb": 2.8},
-}
-
-
-def traditional_value(row):
-    m = TRAD_MULTIPLES[row["CID"]]
-    pe_value = row["EPS"] * m["pe"]
-    pb_value = row["BVPS"] * m["pb"]
-
-    if row["CID"] in ["Financial Franchise", "Memory Cycle", "Shipping Cycle"]:
-        base = pe_value * 0.35 + pb_value * 0.65
-        method = "PE 35% + PB 65%"
-    elif row["CID"] == "Telecom Infrastructure":
-        div_value = row["Dividend"] / 0.038 if row["Dividend"] > 0 else pe_value
-        base = pe_value * 0.35 + pb_value * 0.25 + div_value * 0.40
-        method = "PE 35% + PB 25% + Dividend 40%"
-    else:
-        base = pe_value * 0.70 + pb_value * 0.30
-        method = "PE 70% + PB 30%"
-
-    return {
-        "Traditional Method": method,
-        "Traditional PE Value": round(pe_value, 2),
-        "Traditional PB Value": round(pb_value, 2),
-        "Traditional Base": round(base, 2),
-        "Traditional Bear": round(base * 0.82, 2),
-        "Traditional Bull": round(base * 1.25, 2),
-    }
 
 
 # ============================================================
@@ -287,21 +336,7 @@ def dividend_value(row):
     return div / y if div > 0 else 0
 
 
-MODEL_WEIGHTS = {
-    "AI Infrastructure": {"DCF": 0.25, "FCFF": 0.20, "ROIC Premium": 0.25, "CAP": 0.30},
-    "AI Platform": {"DCF": 0.25, "FCFE": 0.20, "ROIC Premium": 0.25, "CAP": 0.30},
-    "Advanced Materials": {"DCF": 0.20, "FCFF": 0.20, "ROIC Premium": 0.25, "CAP": 0.35},
-    "AI Server Platform": {"DCF": 0.25, "FCFF": 0.25, "ROIC Premium": 0.20, "CAP": 0.30},
-    "Thermal Solution": {"DCF": 0.25, "FCFF": 0.20, "ROIC Premium": 0.30, "CAP": 0.25},
-    "Intelligent Automation": {"DCF": 0.25, "FCFF": 0.20, "EVA": 0.20, "ROIC Premium": 0.20, "CAP": 0.15},
-    "Memory Cycle": {"Cycle PE": 0.35, "EV/EBITDA": 0.25, "Asset Value": 0.30, "EBO": 0.10},
-    "Financial Franchise": {"PB Asset": 0.30, "EBO": 0.30, "Dividend": 0.25, "EVA": 0.15},
-    "Shipping Cycle": {"Cycle PE": 0.30, "EV/EBITDA": 0.30, "Asset Value": 0.30, "Dividend": 0.10},
-    "Telecom Infrastructure": {"DCF": 0.25, "FCFE": 0.15, "EBO": 0.20, "Dividend": 0.40},
-}
-
-
-def intrinsic_components(row):
+def raw_components(row):
     return {
         "DCF": dcf_value(row),
         "FCFF": fcff_value(row),
@@ -318,8 +353,24 @@ def intrinsic_components(row):
     }
 
 
-def intrinsic_value(row):
-    comps = intrinsic_components(row)
+def calibrated_components(row):
+    comps = raw_components(row)
+    cal = CALIBRATION_LIBRARY[row["CID"]]
+    out = {}
+    for k, v in comps.items():
+        factor = cal["Base Multiplier"]
+        if k in ["DCF", "FCFF", "FCFE"]:
+            factor *= cal["Growth Premium"]
+        if k == "ROIC Premium":
+            factor *= cal["ROIC Premium"]
+        if k == "CAP":
+            factor *= cal["CAP Premium"]
+        out[k] = v * factor
+    return out
+
+
+def composite_value(row, calibrated=True):
+    comps = calibrated_components(row) if calibrated else raw_components(row)
     weights = MODEL_WEIGHTS[row["CID"]]
     base = sum(comps[k] * w for k, w in weights.items())
     if row["Stage"] == "Cycle":
@@ -330,13 +381,7 @@ def intrinsic_value(row):
         bear, bull = base * 0.82, base * 1.30
     else:
         bear, bull = base * 0.85, base * 1.18
-    return {
-        "Intrinsic Weights": " / ".join([f"{k}:{int(v*100)}%" for k, v in weights.items()]),
-        "Intrinsic Base": round(base, 2),
-        "Intrinsic Bear": round(bear, 2),
-        "Intrinsic Bull": round(bull, 2),
-        "Components": {k: round(v, 2) for k, v in comps.items()},
-    }
+    return round(bear, 2), round(base, 2), round(bull, 2), comps
 
 
 def gap_status(price, value):
@@ -355,42 +400,19 @@ def gap_status(price, value):
     return status, round(gap, 1)
 
 
-def method_score(row, method_value):
-    """
-    不是股價命中率，而是企業本質適配分數。
-    邏輯：若方法使用的資料與CID本質相符，分數提高。
-    """
-    cid = row["CID"]
-    if method_value == "Traditional":
-        if cid in ["Financial Franchise", "Telecom Infrastructure"]:
-            return 78
-        if cid in ["Memory Cycle", "Shipping Cycle"]:
-            return 65
-        return 55
-    else:
-        if cid in ["AI Infrastructure", "AI Platform", "Advanced Materials", "AI Server Platform", "Thermal Solution"]:
-            return 88
-        if cid in ["Financial Franchise", "Telecom Infrastructure"]:
-            return 86
-        if cid in ["Memory Cycle", "Shipping Cycle"]:
-            return 84
-        return 80
-
-
 rows = []
 component_rows = []
+calibration_rows = []
 
 for c in COMPANIES:
     price, source = fetch_price(c["代號"], c["現價備援"])
     row = {**c, "現價": price, "Price Source": source}
+    raw_bear, raw_base, raw_bull, raw_comps = composite_value(row, calibrated=False)
+    cal_bear, cal_base, cal_bull, cal_comps = composite_value(row, calibrated=True)
 
-    trad = traditional_value(row)
-    intr = intrinsic_value(row)
-
-    trad_status, trad_gap = gap_status(price, trad["Traditional Base"])
-    intr_status, intr_gap = gap_status(price, intr["Intrinsic Base"])
-
-    winner = "Intrinsic" if method_score(row, "Intrinsic") >= method_score(row, "Traditional") else "Traditional"
+    raw_status, raw_gap = gap_status(price, raw_base)
+    cal_status, cal_gap = gap_status(price, cal_base)
+    cal = CALIBRATION_LIBRARY[c["CID"]]
 
     rows.append({
         "公司": c["公司"],
@@ -403,58 +425,80 @@ for c in COMPANIES:
         "ROE": c["ROE"],
         "ROIC": c["ROIC"],
         "FCF_Margin": c["FCF_Margin"],
-        "Traditional Base": trad["Traditional Base"],
-        "Traditional Bear": trad["Traditional Bear"],
-        "Traditional Bull": trad["Traditional Bull"],
-        "Traditional Method": trad["Traditional Method"],
-        "Traditional Gap%": trad_gap,
-        "Traditional Status": trad_status,
-        "Traditional Fit Score": method_score(row, "Traditional"),
-        "Intrinsic Base": intr["Intrinsic Base"],
-        "Intrinsic Bear": intr["Intrinsic Bear"],
-        "Intrinsic Bull": intr["Intrinsic Bull"],
-        "Intrinsic Weights": intr["Intrinsic Weights"],
-        "Intrinsic Gap%": intr_gap,
-        "Intrinsic Status": intr_status,
-        "Intrinsic Fit Score": method_score(row, "Intrinsic"),
-        "Suggested Winner": winner,
+        "Raw Bear": raw_bear,
+        "Raw Base": raw_base,
+        "Raw Bull": raw_bull,
+        "Raw Gap%": raw_gap,
+        "Raw Status": raw_status,
+        "Calibrated Bear": cal_bear,
+        "Calibrated Base": cal_base,
+        "Calibrated Bull": cal_bull,
+        "Calibrated Gap%": cal_gap,
+        "Calibrated Status": cal_status,
+        "Base Multiplier": cal["Base Multiplier"],
+        "Growth Premium": cal["Growth Premium"],
+        "ROIC Premium Factor": cal["ROIC Premium"],
+        "CAP Premium Factor": cal["CAP Premium"],
+        "Calibration Reason": cal["Reason"],
+        "Intrinsic Weights": " / ".join([f"{k}:{int(v*100)}%" for k, v in MODEL_WEIGHTS[c["CID"]].items()]),
         "Price Source": source,
     })
 
-    for k, v in intr["Components"].items():
+    for k, v in raw_comps.items():
         component_rows.append({
             "公司": c["公司"],
-            "模型": k,
-            "模型值": v,
             "CID": c["CID"],
-            "是否被使用": "Yes" if k in MODEL_WEIGHTS[c["CID"]] else "No",
+            "模型": k,
+            "Raw模型值": round(v, 2),
+            "Calibrated模型值": round(cal_comps[k], 2),
+            "是否使用": "Yes" if k in MODEL_WEIGHTS[c["CID"]] else "No",
             "權重": MODEL_WEIGHTS[c["CID"]].get(k, 0),
         })
 
+for cid, cal in CALIBRATION_LIBRARY.items():
+    calibration_rows.append({
+        "CID": cid,
+        "Base Multiplier": cal["Base Multiplier"],
+        "Growth Premium": cal["Growth Premium"],
+        "ROIC Premium": cal["ROIC Premium"],
+        "CAP Premium": cal["CAP Premium"],
+        "Reason": cal["Reason"],
+    })
+
 df = pd.DataFrame(rows)
 component_df = pd.DataFrame(component_rows)
+calibration_df = pd.DataFrame(calibration_rows)
+
+cid_summary = df.groupby("CID").agg(
+    公司數=("公司", "count"),
+    Raw_Fair_Zone=("Raw Status", lambda x: int((x == "Fair Zone").sum())),
+    Calibrated_Fair_Zone=("Calibrated Status", lambda x: int((x == "Fair Zone").sum())),
+    平均RawGap=("Raw Gap%", "mean"),
+    平均CalibratedGap=("Calibrated Gap%", "mean"),
+).reset_index()
+cid_summary["平均RawGap"] = cid_summary["平均RawGap"].round(1)
+cid_summary["平均CalibratedGap"] = cid_summary["平均CalibratedGap"].round(1)
 
 summary = pd.DataFrame([
     {"項目": "樣本公司數", "結果": len(df)},
-    {"項目": "Intrinsic平均Fit Score", "結果": round(df["Intrinsic Fit Score"].mean(), 1)},
-    {"項目": "Traditional平均Fit Score", "結果": round(df["Traditional Fit Score"].mean(), 1)},
-    {"項目": "Intrinsic勝出公司數", "結果": int((df["Suggested Winner"] == "Intrinsic").sum())},
-    {"項目": "Traditional勝出公司數", "結果": int((df["Suggested Winner"] == "Traditional").sum())},
-    {"項目": "Intrinsic Fair Zone公司數", "結果": int((df["Intrinsic Status"] == "Fair Zone").sum())},
-    {"項目": "Traditional Fair Zone公司數", "結果": int((df["Traditional Status"] == "Fair Zone").sum())},
+    {"項目": "Raw Fair Zone公司數", "結果": int((df["Raw Status"] == "Fair Zone").sum())},
+    {"項目": "Calibrated Fair Zone公司數", "結果": int((df["Calibrated Status"] == "Fair Zone").sum())},
+    {"項目": "Raw平均絕對Gap", "結果": f"{round(df['Raw Gap%'].abs().mean(), 1)}%"},
+    {"項目": "Calibrated平均絕對Gap", "結果": f"{round(df['Calibrated Gap%'].abs().mean(), 1)}%"},
+    {"項目": "改善公司數", "結果": int((df["Calibrated Gap%"].abs() < df["Raw Gap%"].abs()).sum())},
 ])
 
 
-st.sidebar.header("V15.0 Beta 控制台")
+st.sidebar.header("V15.0.1 Calibration 控制台")
 page = st.sidebar.radio(
     "功能",
     [
-        "Benchmark Overview",
-        "Traditional vs Intrinsic",
-        "Fair Zone Detector",
+        "Calibration Overview",
+        "Raw vs Calibrated",
+        "Calibration Center",
+        "Fair Zone Heat Map",
         "Company Detail",
-        "Intrinsic Components",
-        "Model Weight Map",
+        "Component Calibration",
         "Export JSON",
     ],
 )
@@ -462,99 +506,97 @@ selected = st.sidebar.selectbox("選擇公司", df["公司"].tolist())
 
 st.sidebar.divider()
 st.sidebar.metric("樣本公司", len(df))
-st.sidebar.metric("Intrinsic勝出", int((df["Suggested Winner"] == "Intrinsic").sum()))
-st.sidebar.metric("Intrinsic平均Fit", round(df["Intrinsic Fit Score"].mean(), 1))
+st.sidebar.metric("Raw Fair Zone", int((df["Raw Status"] == "Fair Zone").sum()))
+st.sidebar.metric("Calibrated Fair Zone", int((df["Calibrated Status"] == "Fair Zone").sum()))
 
-if page == "Benchmark Overview":
-    st.header("一、Benchmark Overview")
-    st.write("本頁驗證：CID + Model Selector 的 Intrinsic Value 是否比傳統 PE/PB 更符合企業本質。")
+if page == "Calibration Overview":
+    st.header("一、Calibration Overview")
+    st.write("比較 V15.0 原始 Intrinsic Value 與 V15.0.1 校正後 Intrinsic Value。")
     st.dataframe(summary, use_container_width=True)
 
     st.subheader("總表")
     st.dataframe(
         df[[
             "公司", "現價", "CID", "Stage",
-            "Traditional Base", "Traditional Status", "Traditional Fit Score",
-            "Intrinsic Base", "Intrinsic Status", "Intrinsic Fit Score",
-            "Suggested Winner"
+            "Raw Base", "Raw Gap%", "Raw Status",
+            "Calibrated Base", "Calibrated Gap%", "Calibrated Status",
+            "Base Multiplier", "Growth Premium", "ROIC Premium Factor", "CAP Premium Factor"
         ]],
         use_container_width=True,
     )
 
-elif page == "Traditional vs Intrinsic":
-    st.header("二、Traditional vs Intrinsic")
-    st.write("比較傳統 PE/PB 估值與智策 Intrinsic Value 估值。")
-    cols = [
-        "公司", "CID", "現價",
-        "Traditional Method", "Traditional Bear", "Traditional Base", "Traditional Bull", "Traditional Gap%",
-        "Intrinsic Weights", "Intrinsic Bear", "Intrinsic Base", "Intrinsic Bull", "Intrinsic Gap%",
-        "Suggested Winner"
-    ]
-    st.dataframe(df[cols], use_container_width=True)
+elif page == "Raw vs Calibrated":
+    st.header("二、Raw vs Calibrated")
+    st.write("確認倍率校正是否改善 Fair Zone。")
+    show = df[[
+        "公司", "現價", "Raw Bear", "Raw Base", "Raw Bull", "Raw Gap%", "Raw Status",
+        "Calibrated Bear", "Calibrated Base", "Calibrated Bull", "Calibrated Gap%", "Calibrated Status"
+    ]]
+    st.dataframe(show, use_container_width=True)
+    chart_df = df.set_index("公司")[["Raw Gap%", "Calibrated Gap%"]]
+    st.bar_chart(chart_df)
 
-elif page == "Fair Zone Detector":
-    st.header("三、Fair Zone Detector")
-    st.write("不是所有公司都需要市場校正。若內在價值與現價差異在 ±15%，直接判定 Fair Zone。")
-    st.dataframe(
-        df[[
-            "公司", "現價",
-            "Traditional Base", "Traditional Gap%", "Traditional Status",
-            "Intrinsic Base", "Intrinsic Gap%", "Intrinsic Status",
-        ]],
-        use_container_width=True,
-    )
-    st.bar_chart(df.set_index("公司")["Intrinsic Gap%"])
+elif page == "Calibration Center":
+    st.header("三、Calibration Center")
+    st.write("CID層級的倍率資料庫。校正對象是CID，不是單一公司。")
+    st.dataframe(calibration_df, use_container_width=True)
+
+    st.subheader("CID改善摘要")
+    st.dataframe(cid_summary, use_container_width=True)
+
+elif page == "Fair Zone Heat Map":
+    st.header("四、Fair Zone Heat Map")
+    st.write("檢查哪些公司仍然偏離，需要未來做 Forecast Revision 或更細的CID倍率庫。")
+    heat = df[[
+        "公司", "CID", "現價", "Raw Base", "Raw Gap%", "Raw Status",
+        "Calibrated Base", "Calibrated Gap%", "Calibrated Status",
+        "Calibration Reason"
+    ]]
+    st.dataframe(heat, use_container_width=True)
 
 elif page == "Company Detail":
-    st.header("四、Company Detail")
+    st.header("五、Company Detail")
     row = df[df["公司"] == selected].iloc[0]
     comps = component_df[component_df["公司"] == selected]
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("現價", f"{row['現價']:,.2f}")
-    c2.metric("Traditional Base", f"{row['Traditional Base']:,.2f}", f"{row['Traditional Gap%']}%")
-    c3.metric("Intrinsic Base", f"{row['Intrinsic Base']:,.2f}", f"{row['Intrinsic Gap%']}%")
-    c4.metric("Suggested Winner", row["Suggested Winner"])
+    c2.metric("Raw Base", f"{row['Raw Base']:,.2f}", f"{row['Raw Gap%']}%")
+    c3.metric("Calibrated Base", f"{row['Calibrated Base']:,.2f}", f"{row['Calibrated Gap%']}%")
+    c4.metric("Calibrated Status", row["Calibrated Status"])
 
     detail = pd.DataFrame([
         {"項目": "CID", "內容": row["CID"]},
         {"項目": "Stage", "內容": row["Stage"]},
-        {"項目": "Traditional Method", "內容": row["Traditional Method"]},
         {"項目": "Intrinsic Weights", "內容": row["Intrinsic Weights"]},
-        {"項目": "Traditional Status", "內容": row["Traditional Status"]},
-        {"項目": "Intrinsic Status", "內容": row["Intrinsic Status"]},
-        {"項目": "Price Source", "內容": row["Price Source"]},
+        {"項目": "Base Multiplier", "內容": row["Base Multiplier"]},
+        {"項目": "Growth Premium", "內容": row["Growth Premium"]},
+        {"項目": "ROIC Premium Factor", "內容": row["ROIC Premium Factor"]},
+        {"項目": "CAP Premium Factor", "內容": row["CAP Premium Factor"]},
+        {"項目": "Reason", "內容": row["Calibration Reason"]},
     ])
     st.dataframe(detail, use_container_width=True)
 
-    st.subheader("Intrinsic Components")
+    st.subheader("Component Calibration")
     st.dataframe(comps, use_container_width=True)
-    used = comps[comps["是否被使用"] == "Yes"]
-    st.bar_chart(used.set_index("模型")["模型值"])
+    used = comps[comps["是否使用"] == "Yes"].set_index("模型")[["Raw模型值", "Calibrated模型值"]]
+    st.bar_chart(used)
 
-elif page == "Intrinsic Components":
-    st.header("五、Intrinsic Components")
-    st.write("列出每家公司所有估值模型值，以及是否被該CID權重使用。")
+elif page == "Component Calibration":
+    st.header("六、Component Calibration")
+    st.write("各模型在校正前後的變化。")
     st.dataframe(component_df, use_container_width=True)
-
-elif page == "Model Weight Map":
-    st.header("六、Model Weight Map")
-    weight_rows = []
-    for cid, weights in MODEL_WEIGHTS.items():
-        for model, w in weights.items():
-            weight_rows.append({"CID": cid, "Model": model, "Weight": w})
-    weight_df = pd.DataFrame(weight_rows)
-    st.dataframe(weight_df, use_container_width=True)
 
 elif page == "Export JSON":
     st.header("七、Export JSON")
     export = {
-        "version": "V15.0 Beta Intrinsic Value Benchmark Test",
+        "version": "V15.0.1 Multiplier Calibration Engine",
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "purpose": "Test whether CID + Model Selector + Intrinsic Value is more suitable than pure PE/PB valuation.",
+        "purpose": "Calibrate valuation scale by CID without changing CID or Model Selector.",
         "results": df.to_dict(orient="records"),
         "components": component_df.to_dict(orient="records"),
-        "model_weights": MODEL_WEIGHTS,
+        "calibration_library": CALIBRATION_LIBRARY,
+        "cid_summary": cid_summary.to_dict(orient="records"),
         "summary": summary.to_dict(orient="records"),
     }
     st.code(json.dumps(export, ensure_ascii=False, indent=2), language="json")
