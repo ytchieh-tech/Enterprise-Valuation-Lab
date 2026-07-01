@@ -7,10 +7,10 @@ try:
 except Exception:
     yf = None
 
-st.set_page_config(page_title='Enterprise Valuation Lab V12.9.1', page_icon='🏛️', layout='wide')
+st.set_page_config(page_title='Enterprise Valuation Lab V12.9.2', page_icon='🏛️', layout='wide')
 st.title('🏛️ Enterprise Valuation Lab')
-st.subheader('V12.9.1｜CID Profile Engine 分數校準版')
-st.info('V12.9.1 修正 Identity Confidence 過低問題：主身份清楚度改由 Identity Concentration + Tree Concentration 綜合判斷。')
+st.subheader('V12.9.2｜CID Reliability Engine')
+st.info('V12.9.2 將 Confidence、Concentration、Coherence、Drift、Reliability 五個概念拆開，避免單一信心分數失真。')
 
 @st.cache_data(ttl=900)
 def fetch_price(symbol, fallback=None):
@@ -64,19 +64,23 @@ def concentration(scores):
     top=v[0]; second=v[1] if len(v)>1 else 0; third=v[2] if len(v)>2 else 0
     return round(max(0,min(100,top*.75+(top-second)*.45-third*.15)),1)
 
-def identity_confidence(ids):
-    # V12.9.1 校準版：
-    # 不只看單一主身份分數，也看主樹系集中度。
-    # 避免台積電、台光電、和椿這類多重但同價值鏈公司被壓太低。
+def identity_concentration(ids):
+    # 身份集中度：回答「身份是否集中」
+    return concentration(ids)
+
+def identity_confidence(ids, fin=None, company=None):
+    # 身份信心度：回答「系統是否有把握判斷正確」
     trees = tree_scores(ids)
-    id_conc = concentration(ids)
     tree_conc = concentration(trees)
-    vals = list(ids.values())
-    top = vals[0] if vals else 0
-    second = vals[1] if len(vals) > 1 else 0
-    base_clarity = top * 0.9 + max(0, top - second) * 0.35
-    score = tree_conc * 0.45 + id_conc * 0.25 + base_clarity * 0.30
+    coh = coherence(ids)
+    comp = completeness(fin) if fin is not None else 90
+    drift, _ = drift_score(company) if company is not None else (75, "")
+    score = tree_conc * 0.35 + coh * 0.25 + comp * 0.20 + drift * 0.20
     return round(max(0, min(95, score)), 1)
+
+def cid_reliability(conf, comp, drift):
+    # CID可信度：此CID Profile是否可供後續模型選擇器採用
+    return round(max(0, min(98, conf * 0.40 + comp * 0.30 + drift * 0.30)), 1)
 def coherence(ids):
     items=list(ids.items())[:5]
     if len(items)<=1: return 90
@@ -114,9 +118,9 @@ def cid_scores(c,fin):
     if c['sector']=='Financial': raw['Financial Franchise']=raw.get('Financial Franchise',0)+12
     return norm(raw)
 def maturity(conf,coh,drift,cycle):
-    # V12.9.1：分數校準後的成熟度門檻
-    if conf>=58 and coh>=78 and drift>=70 and cycle<80: return 'Mature Leader'
-    if conf>=48 and coh>=68 and drift>=60: return 'Emerging Leader'
+    # V12.9.2：Confidence 與 Concentration 分離後的成熟度門檻
+    if conf>=80 and coh>=78 and drift>=70 and cycle<80: return 'Mature Leader'
+    if conf>=70 and coh>=65 and drift>=60: return 'Emerging Leader'
     if cycle>=80: return 'Cycle Driven'
     if drift<60: return 'Transitioning'
     if coh<55: return 'Conglomerate / Multi-Identity'
@@ -150,30 +154,39 @@ companies={
 rows=[]; profile_rows=[]; radar_rows=[]; drift_rows=[]
 for name,c in companies.items():
     price,ps=fetch_price(c['symbol'],c['fallback_price']); fin=c['fin']; ids=cid_scores(c,fin); trees=tree_scores(ids)
-    conf=identity_confidence(ids); coh=coherence(ids); drift,dtxt=drift_score(c); comp=completeness(fin)
+    conc=identity_concentration(ids); coh=coherence(ids); drift,dtxt=drift_score(c); comp=completeness(fin); conf=identity_confidence(ids,fin,c); reli=cid_reliability(conf,comp,drift)
     main=max(ids,key=ids.get); second=list(ids.keys())[1] if len(ids)>1 else ''; third=list(ids.keys())[2] if len(ids)>2 else ''
     mat=maturity(conf,coh,drift,fin.get('Cycle_Score',0)); sugg=model_suggest(main,mat,c['sector']); summ=prof_sum(main,mat)
-    rows.append({'公司':name,'代號':c['symbol'],'現價':price,'主身份':main,'副身份':second,'第三身份':third,'主樹系':max(trees,key=trees.get),'Identity Confidence':conf,'Identity Coherence':coh,'Identity Drift':drift,'Data Completeness':comp,'Growth Exposure':fin.get('Revenue_CAGR',0),'Cycle Exposure':fin.get('Cycle_Score',0),'VDF Exposure':fin.get('VDF_Exposure',0),'身份成熟度':mat,'建議模型':sugg,'CID總評':summ,'Drift方向':dtxt,'身份分布':'、'.join([f'{k}:{v}%' for k,v in ids.items()]),'樹系分布':'、'.join([f'{k}:{v:.1f}%' for k,v in trees.items()]),'現價來源':ps})
+    rows.append({'公司':name,'代號':c['symbol'],'現價':price,'主身份':main,'副身份':second,'第三身份':third,'主樹系':max(trees,key=trees.get),'Identity Confidence':conf,'Identity Concentration':conc,'Identity Coherence':coh,'Identity Drift':drift,'CID Reliability':reli,'Data Completeness':comp,'Growth Exposure':fin.get('Revenue_CAGR',0),'Cycle Exposure':fin.get('Cycle_Score',0),'VDF Exposure':fin.get('VDF_Exposure',0),'身份成熟度':mat,'建議模型':sugg,'CID總評':summ,'Drift方向':dtxt,'身份分布':'、'.join([f'{k}:{v}%' for k,v in ids.items()]),'樹系分布':'、'.join([f'{k}:{v:.1f}%' for k,v in trees.items()]),'現價來源':ps})
     for k,v in ids.items(): profile_rows.append({'公司':name,'項目':k,'類型':'Identity','Score':v,'Tree':tree_of(k)})
     for k,v in trees.items(): profile_rows.append({'公司':name,'項目':k,'類型':'Tree','Score':round(v,1),'Tree':k})
-    for metric,value in {'Identity Confidence':conf,'Identity Coherence':coh,'Identity Drift':drift,'Growth Exposure':min(100,fin.get('Revenue_CAGR',0)*3),'Cycle Exposure':fin.get('Cycle_Score',0),'VDF Exposure':fin.get('VDF_Exposure',0)}.items(): radar_rows.append({'公司':name,'CID維度':metric,'Score':round(value,1)})
+    for metric,value in {'Identity Confidence':conf,'Identity Concentration':conc,'Identity Coherence':coh,'Identity Drift':drift,'CID Reliability':reli,'Growth Exposure':min(100,fin.get('Revenue_CAGR',0)*3),'Cycle Exposure':fin.get('Cycle_Score',0),'VDF Exposure':fin.get('VDF_Exposure',0)}.items(): radar_rows.append({'公司':name,'CID維度':metric,'Score':round(value,1)})
     for y,d in c.get('identity_drift',{}).items():
         for i,s in d.items(): drift_rows.append({'公司':name,'年份':y,'Identity':i,'Score':s})
 
 df=pd.DataFrame(rows); profile_df=pd.DataFrame(profile_rows); radar_df=pd.DataFrame(radar_rows); drift_df=pd.DataFrame(drift_rows)
-summary_df=pd.DataFrame([{'指標':'樣本公司數','值':len(df)},{'指標':'平均Identity Confidence','值':f"{round(df['Identity Confidence'].mean(),1)}%"},{'指標':'平均Identity Coherence','值':f"{round(df['Identity Coherence'].mean(),1)}%"},{'指標':'平均Identity Drift','值':f"{round(df['Identity Drift'].mean(),1)}%"},{'指標':'Mature Leader數','值':int((df['身份成熟度']=='Mature Leader').sum())},{'指標':'Transitioning數','值':int((df['身份成熟度']=='Transitioning').sum())}])
+summary_df=pd.DataFrame([
+{'指標':'樣本公司數','值':len(df)},
+{'指標':'平均Identity Confidence','值':f"{round(df['Identity Confidence'].mean(),1)}%"},
+{'指標':'平均Identity Concentration','值':f"{round(df['Identity Concentration'].mean(),1)}%"},
+{'指標':'平均Identity Coherence','值':f"{round(df['Identity Coherence'].mean(),1)}%"},
+{'指標':'平均Identity Drift','值':f"{round(df['Identity Drift'].mean(),1)}%"},
+{'指標':'平均CID Reliability','值':f"{round(df['CID Reliability'].mean(),1)}%"},
+{'指標':'Mature Leader數','值':int((df['身份成熟度']=='Mature Leader').sum())},
+{'指標':'Transitioning數','值':int((df['身份成熟度']=='Transitioning').sum())}
+])
 maturity_summary=df.groupby('身份成熟度').size().reset_index(name='公司數').sort_values('公司數',ascending=False)
 
-st.sidebar.header('V12.9 CID 控制台')
+st.sidebar.header('V12.9.2 CID 控制台')
 page=st.sidebar.radio('功能',['CID Profile Overview','Profile Card','CID Radar','Identity Distribution','Identity Drift','Model Suggestion','Export JSON'])
 selected_company=st.sidebar.selectbox('選擇公司',df['公司'].tolist())
-st.sidebar.divider(); st.sidebar.metric('樣本公司',len(df)); st.sidebar.metric('平均Confidence',f"{round(df['Identity Confidence'].mean(),1)}%"); st.sidebar.metric('平均Coherence',f"{round(df['Identity Coherence'].mean(),1)}%")
+st.sidebar.divider(); st.sidebar.metric('樣本公司',len(df)); st.sidebar.metric('平均Confidence',f"{round(df['Identity Confidence'].mean(),1)}%"); st.sidebar.metric('平均Reliability',f"{round(df['CID Reliability'].mean(),1)}%")
 if page=='CID Profile Overview':
-    st.header('一、CID Profile Overview'); st.write('V12.9 將 Confidence、Coherence、Drift 拆開並列，避免單一分數失真。'); st.dataframe(df,use_container_width=True); st.subheader('CID摘要'); st.dataframe(summary_df,use_container_width=True); st.subheader('身份成熟度分布'); st.dataframe(maturity_summary,use_container_width=True)
+    st.header('一、CID Profile Overview'); st.write('V12.9.2 將 Confidence、Concentration、Coherence、Drift、Reliability 拆開並列，避免單一分數失真。'); st.dataframe(df,use_container_width=True); st.subheader('CID摘要'); st.dataframe(summary_df,use_container_width=True); st.subheader('身份成熟度分布'); st.dataframe(maturity_summary,use_container_width=True)
 elif page=='Profile Card':
     st.header('二、Identity Profile Card'); row=df[df['公司']==selected_company].iloc[0]
     c1,c2,c3,c4=st.columns(4); c1.metric('主身份',row['主身份']); c2.metric('副身份',row['副身份']); c3.metric('身份成熟度',row['身份成熟度']); c4.metric('現價','N/A' if row['現價'] is None else f"{row['現價']:,.2f}")
-    score_card=pd.DataFrame([{'CID分數':'Identity Confidence','Score':row['Identity Confidence'],'說明':'主身份是否清楚'},{'CID分數':'Identity Coherence','Score':row['Identity Coherence'],'說明':'多個身份是否屬同一價值鏈'},{'CID分數':'Identity Drift','Score':row['Identity Drift'],'說明':'身份轉移是否穩定'},{'CID分數':'Data Completeness','Score':row['Data Completeness'],'說明':'資料完整度'}])
+    score_card=pd.DataFrame([{'CID分數':'Identity Confidence','Score':row['Identity Confidence'],'說明':'系統是否有把握判斷正確'},{'CID分數':'Identity Concentration','Score':row['Identity Concentration'],'說明':'身份是否集中'},{'CID分數':'Identity Coherence','Score':row['Identity Coherence'],'說明':'多個身份是否屬同一價值鏈'},{'CID分數':'Identity Drift','Score':row['Identity Drift'],'說明':'身份轉移是否穩定'},{'CID分數':'CID Reliability','Score':row['CID Reliability'],'說明':'是否可供模型選擇器採用'},{'CID分數':'Data Completeness','Score':row['Data Completeness'],'說明':'資料完整度'}])
     st.subheader('CID 三大核心分數'); st.dataframe(score_card,use_container_width=True); st.subheader('CID總評'); st.success(row['CID總評']); st.subheader('建議模型'); st.info(row['建議模型'])
 elif page=='CID Radar':
     st.header('三、CID Radar'); selected=radar_df[radar_df['公司']==selected_company]; st.dataframe(selected,use_container_width=True); st.bar_chart(selected.set_index('CID維度')['Score'])
@@ -185,4 +198,4 @@ elif page=='Identity Drift':
 elif page=='Model Suggestion':
     st.header('六、Model Suggestion'); st.dataframe(df[['公司','主身份','身份成熟度','建議模型','CID總評']],use_container_width=True)
 elif page=='Export JSON':
-    st.header('七、Export JSON'); export={'version':'V12.9.1 CID Profile Engine Calibrated','updated_at':datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'concept':'Identity Confidence, Coherence, and Drift are shown separately instead of being compressed into a single score.','cid_profiles':df.to_dict(orient='records'),'identity_distribution':profile_df.to_dict(orient='records'),'cid_radar':radar_df.to_dict(orient='records'),'identity_drift':drift_df.to_dict(orient='records'),'identity_tree':IDENTITY_TREE,'summary':summary_df.to_dict(orient='records')}; st.code(json.dumps(export,ensure_ascii=False,indent=2),language='json')
+    st.header('七、Export JSON'); export={'version':'V12.9.2 CID Reliability Engine','updated_at':datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'concept':'Identity Confidence, Concentration, Coherence, Drift, and Reliability are separated to avoid one-score distortion.','cid_profiles':df.to_dict(orient='records'),'identity_distribution':profile_df.to_dict(orient='records'),'cid_radar':radar_df.to_dict(orient='records'),'identity_drift':drift_df.to_dict(orient='records'),'identity_tree':IDENTITY_TREE,'summary':summary_df.to_dict(orient='records')}; st.code(json.dumps(export,ensure_ascii=False,indent=2),language='json')
