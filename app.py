@@ -160,6 +160,20 @@ def implied_growth_status(implied_growth):
         return "High"
     return "Extreme"
 
+
+# V17.1 Growth Input Rebuild
+def growth_score_v171(r):
+    rev3 = max(-20, min(60, r["Revenue_CAGR"]))
+    rev5 = rev3  # current dataset only has one CAGR source
+    roic = max(0, min(60, r["ROIC"]))
+    fcf = max(-10, min(30, r["FCF_Margin"]))
+    return round(rev5*0.40 + rev3*0.30 + roic*0.20 + fcf*0.10, 1)
+
+def implied_growth_v171(score, premium):
+    if premium is None:
+        return None
+    return round(score * premium, 1)
+
 def safe_num(x):
     try:
         if x is None or pd.isna(x): return None
@@ -314,12 +328,13 @@ for i,item in enumerate(BENCHMARK, start=1):
     exp_gap, exp_stat = gap_status(price, exp_fair)
     fef = round(price / fair, 3) if fair and fair > 0 else None
     historical_g = historical_growth_alpha(r)
-    implied_g = implied_growth_alpha(historical_g, fef)
+    growth_score = growth_score_v171(r)
+    implied_g = implied_growth_v171(growth_score, fef)
     implied_status = implied_growth_status(implied_g)
     cal = STRUCTURAL_CAL[item["CID"]]
     rows.append({"公司":item["公司"],"代號":item["代號"],"CID":item["CID"],"Stage":item["Stage"],"現價":price,
                  "Bear":bear,"Fair Value":fair,"Bull":bull,"Gap%":gap,"Status":stat,
-                 "Premium":fef,"Historical Growth%":historical_g,"Implied Growth%":implied_g,"Implied Growth Status":implied_status,
+                 "Premium":fef,"Historical Growth%":historical_g,"Growth Score":growth_score,"Implied Growth%":implied_g,"Implied Growth Status":implied_status,
                  "GHE Multiplier":ghe_mult,"Forward Growth Proxy%":forward_g,"Horizon Years":horizon_years,"Horizon Cap":horizon_cap,
                  "Expected Bear":exp_bear,"Expected Fair":exp_fair,"Expected Bull":exp_bull,"Expected Gap%":exp_gap,"Expected Status":exp_stat,
                  "Market FEF":fef,"GHE Confidence":ghe_conf,"GHE Mode":ghe_mode,
@@ -330,7 +345,7 @@ for i,item in enumerate(BENCHMARK, start=1):
 progress.empty()
 
 df=pd.DataFrame(rows); component_df=pd.DataFrame(comp_rows)
-cid_summary=df.groupby("CID").agg(公司數=("公司","count"),平均Gap=("Gap%","mean"),中位數Gap=("Gap%","median"),平均絕對Gap=("Gap%",lambda x:x.abs().mean()),Expected平均Gap=("Expected Gap%","mean"),Expected平均絕對Gap=("Expected Gap%",lambda x:x.abs().mean()),FEF中位數=("Market FEF","median"),Premium平均=("Premium","mean"),HistoricalGrowth平均=("Historical Growth%","mean"),ImpliedGrowth平均=("Implied Growth%","mean"),ImpliedGrowth中位數=("Implied Growth%","median"),GHE倍率中位數=("GHE Multiplier","median"),Gap標準差=("Gap%","std"),FairZone數=("Status",lambda x:int((x=="Fair Zone").sum())),ExpectedFairZone數=("Expected Status",lambda x:int((x=="Fair Zone").sum())),平均資料完整度=("Data Completeness","mean")).reset_index().round(2)
+cid_summary=df.groupby("CID").agg(公司數=("公司","count"),平均Gap=("Gap%","mean"),中位數Gap=("Gap%","median"),平均絕對Gap=("Gap%",lambda x:x.abs().mean()),Expected平均Gap=("Expected Gap%","mean"),Expected平均絕對Gap=("Expected Gap%",lambda x:x.abs().mean()),FEF中位數=("Market FEF","median"),Premium平均=("Premium","mean"),HistoricalGrowth平均=("Historical Growth%","mean"),GrowthScore平均=("Growth Score","mean"),ImpliedGrowth平均=("Implied Growth%","mean"),ImpliedGrowth中位數=("Implied Growth%","median"),GHE倍率中位數=("GHE Multiplier","median"),Gap標準差=("Gap%","std"),FairZone數=("Status",lambda x:int((x=="Fair Zone").sum())),ExpectedFairZone數=("Expected Status",lambda x:int((x=="Fair Zone").sum())),平均資料完整度=("Data Completeness","mean")).reset_index().round(2)
 def cid_grade(row):
     if row["公司數"] < 3: return "待補樣本"
     if row["平均絕對Gap"] <= 20 and row["Gap標準差"] <= 25: return "A級：可暫時凍結"
