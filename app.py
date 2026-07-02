@@ -10,10 +10,10 @@ try:
 except Exception:
     yf = None
 
-st.set_page_config(page_title="智策企業估值實驗室 V20.3", page_icon="🏛️", layout="wide")
+st.set_page_config(page_title="智策企業估值實驗室 V20.4", page_icon="🏛️", layout="wide")
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("V20.3｜股價人工覆核版：記憶體價格強制修正")
-st.info("本版針對記憶體族群啟用人工覆核價格，不再直接採用 yfinance 連線價；保留原始股價、修正股價與審查備註，避免10倍錯誤影響估值判讀。")
+st.subheader("V20.4｜記憶體循環 × AI自動化模型重建版")
+st.info("本版重建記憶體與AI自動化估值區間：記憶體改用PB景氣循環模型；上銀、所羅門、和椿改用AI自動化未來選擇權模型。")
 
 BENCHMARK = [
     # AI Infrastructure
@@ -287,6 +287,58 @@ def audit_and_fix_price(symbol, price):
     status = "已自動修正" if auto_fixed else ("通過" if low <= fixed_price <= high else "需人工確認")
     return fixed_price, status, note, auto_fixed
 
+# ============================================================
+# V20.4 類股專用估值模型
+# ============================================================
+
+def memory_cycle_pb_model(r):
+    """
+    記憶體循環不再用單年EPS/DCF。
+    改用BVPS × PB Cycle，避免景氣谷底EPS造成估值崩潰或暴衝。
+    """
+    bvps = max(0, r["BVPS"])
+    health = r.get("Industry_Health", 75)
+
+    # 景氣位置：保守0.6PB、合理0.9~1.1PB、樂觀1.4~1.8PB
+    fair_pb = 0.90 + max(0, min(25, health - 70)) / 100
+    bear_pb = max(0.45, fair_pb * 0.65)
+    bull_pb = fair_pb * 1.65
+
+    bear = round(bvps * bear_pb, 2)
+    fair = round(bvps * fair_pb, 2)
+    bull = round(bvps * bull_pb, 2)
+
+    future_fair = round(bvps * min(fair_pb * 1.55, 1.85), 2)
+    return bear, fair, bull, future_fair, "PB景氣循環模型"
+
+def automation_future_option_model(r, current_bear, current_fair, current_bull):
+    """
+    AI自動化加入未來選擇權。
+    現況價值仍保留，但未來價值用EPS成長權利金與ROIC品質重新估。
+    """
+    eps = max(0, r["EPS"])
+    roe = max(0, r["ROE"])
+    roic = max(0, r["ROIC"])
+    growth = max(0, min(50, r["Revenue_CAGR"]))
+    fcf = max(0, min(25, r["FCF_Margin"]))
+
+    quality = 1 + (growth * 0.008) + (roic * 0.006) + (fcf * 0.004)
+
+    if r["代號"] == "2049.TW":      # 上銀：機器人與精密傳動，給較高但不無限放大
+        pe_base = 34
+    elif r["代號"] == "2359.TW":    # 所羅門：AI視覺/機器人題材
+        pe_base = 42
+    elif r["代號"] == "6215.TWO":   # 和椿：中小型自動化
+        pe_base = 28
+    else:
+        pe_base = 30
+
+    option_value = eps * pe_base * quality
+    future_fair = round(max(current_fair * 1.15, option_value), 2)
+    future_bear = round(future_fair * 0.70, 2)
+    future_bull = round(future_fair * 1.45, 2)
+    return future_bear, future_fair, future_bull, "AI自動化未來選擇權模型"
+
 def future_value_multiplier(r):
     base = FUTURE_MULTIPLIER.get(r["CID"], 1.0)
     growth_quality = max(0, min(35, normalized_growth_rate(r) * 100)) / 100
@@ -501,6 +553,19 @@ for i,item in enumerate(BENCHMARK, start=1):
     future_bear = round(bear * future_mult, 2)
     future_fair = round(fair * future_mult, 2)
     future_bull = round(bull * future_mult, 2)
+    sector_model_note = "一般雙軌模型"
+
+    # V20.4：記憶體改用PB景氣循環模型，重算現況與未來區間
+    if item["CID"] == "Memory Cycle":
+        bear, fair, bull, future_fair, sector_model_note = memory_cycle_pb_model(r)
+        gap, stat = gap_status(price, fair)
+        future_bear = round(future_fair * 0.70, 2)
+        future_bull = round(future_fair * 1.45, 2)
+
+    # V20.4：AI自動化保留現況價值，但未來價值改用選擇權模型
+    if item["CID"] == "Intelligent Automation":
+        future_bear, future_fair, future_bull, sector_model_note = automation_future_option_model(r, bear, fair, bull)
+
     future_gap, future_status = gap_status(price, future_fair)
     cid_zh = CID_ZH.get(item["CID"], item["CID"])
     status_zh = STATUS_ZH.get(stat, stat)
@@ -513,7 +578,7 @@ for i,item in enumerate(BENCHMARK, start=1):
     cal = STRUCTURAL_CAL[item["CID"]]
     rows.append({"公司":item["公司"],"代號":item["代號"],"產業定位":cid_zh,"CID":item["CID"],"Stage":item["Stage"],"現價":price,"原始股價":raw_price,"股價審查":price_audit_status,"股價審查備註":price_audit_note,"股價自動修正":price_auto_fixed,
                  "現況保守價":bear,"現況合理價":fair,"現況樂觀價":bull,"現況偏離%":gap,"估值狀態":status_zh,
-                 "未來倍率":future_mult,"未來保守價":future_bear,"未來合理價":future_fair,"未來樂觀價":future_bull,"未來偏離%":future_gap,
+                 "未來倍率":future_mult,"類股模型註記":sector_model_note,"未來保守價":future_bear,"未來合理價":future_fair,"未來樂觀價":future_bull,"未來偏離%":future_gap,
                  "現價位置":position,"估值狀態V20.1":valuation_status_new,"市場情緒":sentiment,"使用引擎":engine_type,
                  "市場溢價倍數":fef,"歷史成長率%":historical_g,"市場隱含成長%":implied_g,"隱含成長狀態":implied_status,
                  "Bear":bear,"Fair Value":fair,"Bull":bull,"Gap%":gap,"Status":stat,
@@ -569,7 +634,7 @@ summary=pd.DataFrame([
 ])
 
 st.sidebar.header("V20.1 控制台")
-page=st.sidebar.radio("功能",["類股估值總覽","股價審查中心","類股成熟度中心","類股熱度排行榜","異常值排行榜","雙軌估值","市場情緒儀表板","個股明細","模型中心","原始Benchmark","Export JSON"])
+page=st.sidebar.radio("功能",["類股估值總覽","記憶體與自動化重估","股價審查中心","類股成熟度中心","類股熱度排行榜","異常值排行榜","雙軌估值","市場情緒儀表板","個股明細","模型中心","原始Benchmark","Export JSON"])
 selected=st.sidebar.selectbox("選擇公司",df["公司"].tolist())
 st.sidebar.divider(); st.sidebar.metric("樣本公司",len(df)); st.sidebar.metric("Intrinsic Fair",int((df["Status"]=="Fair Zone").sum())); st.sidebar.metric("Expected Fair",int((df["Expected Status"]=="Fair Zone").sum())); st.sidebar.metric("平均溢價",round(df["市場溢價倍數"].mean(),2)); st.sidebar.metric("極度高估",int((df["估值狀態V20.1"]=="極度高估").sum()))
 
@@ -581,9 +646,18 @@ if page=="類股估值總覽":
         avg_premium = round(sdf["市場溢價倍數"].mean(), 2)
         st.subheader(f"{sector}｜平均溢價 {avg_premium}")
         st.dataframe(
-            sdf[["公司","代號","現價","現況保守價","現況合理價","現況樂觀價","未來合理價","估值狀態V20.1","市場情緒","現價位置","使用引擎"]],
+            sdf[["公司","代號","現價","現況保守價","現況合理價","現況樂觀價","未來合理價","估值狀態V20.1","市場情緒","現價位置","使用引擎","類股模型註記"]],
             use_container_width=True
         )
+
+elif page=="記憶體與自動化重估":
+    st.header("二、記憶體與AI自動化重估")
+    st.write("針對目前最容易失真的兩組：記憶體循環、AI自動化，使用專用模型重新估值。")
+    focus = df[df["CID"].isin(["Memory Cycle", "Intelligent Automation"])][
+        ["公司","代號","產業定位","現價","現況保守價","現況合理價","現況樂觀價","未來合理價","估值狀態V20.1","市場情緒","類股模型註記","股價審查","股價審查備註"]
+    ]
+    st.dataframe(focus, use_container_width=True)
+    st.bar_chart(focus.set_index("公司")[["現價","現況合理價","未來合理價"]])
 
 elif page=="股價審查中心":
     st.header("二、股價審查中心")
@@ -625,7 +699,7 @@ elif page=="異常值排行榜":
     st.header("三、異常值排行榜")
     st.write("列出目前價格偏離現況合理價最多的公司，作為後續模型修正與研究重點。")
     st.dataframe(
-        outlier_rank[["排名","公司","代號","產業定位","現價","現況合理價","未來合理價","現況偏離%","未來偏離%","估值狀態V20.1","市場情緒","使用引擎"]].head(15),
+        outlier_rank[["排名","公司","代號","產業定位","現價","現況合理價","未來合理價","現況偏離%","未來偏離%","估值狀態V20.1","市場情緒","使用引擎","類股模型註記"]].head(15),
         use_container_width=True
     )
     st.bar_chart(outlier_rank.head(15).set_index("公司")["偏離絕對值"])
@@ -634,7 +708,7 @@ elif page=="雙軌估值":
     st.header("四、雙軌估值")
     st.write("同時比較市場現價、現況價值與未來價值。")
     st.dataframe(
-        df[["公司","產業定位","現價","現況保守價","現況合理價","現況樂觀價","未來保守價","未來合理價","未來樂觀價","現價位置"]],
+        df[["公司","產業定位","現價","現況保守價","現況合理價","現況樂觀價","未來保守價","未來合理價","未來樂觀價","現價位置","類股模型註記"]],
         use_container_width=True
     )
     st.bar_chart(df.set_index("公司")[["現況合理價","未來合理價","現價"]])
@@ -662,7 +736,7 @@ elif page=="個股明細":
     c4.metric("估值狀態",row["估值狀態V20.1"])
     st.dataframe(pd.DataFrame([
         {"項目":"產業定位","內容":row["產業定位"]},
-        {"項目":"使用引擎","內容":row["使用引擎"]},
+        {"項目":"使用引擎","內容":row["使用引擎"]},{"項目":"類股模型註記","內容":row["類股模型註記"]},
         {"項目":"現價位置","內容":row["現價位置"]},{"項目":"估值狀態","內容":row["估值狀態V20.1"]},{"項目":"市場情緒","內容":row["市場情緒"]},
         {"項目":"市場溢價倍數","內容":row["市場溢價倍數"]},
         {"項目":"歷史成長率%","內容":row["歷史成長率%"]},
@@ -683,7 +757,8 @@ elif page=="模型中心":
     model_df = pd.DataFrame([
         {"模型":"現況估值引擎","適用類股":"金融特許權、電信基礎建設、航運循環、AI自動化","目的":"回答公司目前值多少"},
         {"模型":"未來價值引擎","適用類股":"AI基礎建設、AI平台、AI伺服器平台、高階材料、散熱解決方案","目的":"回答未來成長實現後值多少"},
-        {"模型":"景氣循環引擎","適用類股":"記憶體循環","目的":"避免單年EPS造成估值崩潰"},
+        {"模型":"PB景氣循環模型","適用類股":"記憶體循環","目的":"以BVPS × PB Cycle重建南亞科、華邦電、旺宏估值區間"},
+        {"模型":"AI自動化未來選擇權模型","適用類股":"AI自動化","目的":"以EPS × 成長權利金重估上銀、所羅門、和椿未來價值"},
     ])
     st.dataframe(model_df, use_container_width=True)
     st.subheader("結構校正資料")
@@ -696,5 +771,5 @@ elif page=="原始Benchmark":
 
 elif page=="Export JSON":
     st.header("九、Export JSON")
-    export={"version":"V20.3 Manual Price Override Layer","updated_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"purpose":"Force manual reviewed prices for memory stocks when yfinance prices show 10x errors; keep audit layer for Hiwin and Solomon.","valuation_results":df.to_dict(orient="records"),"cid_summary":cid_summary.to_dict(orient="records"),"components":component_df.to_dict(orient="records"),"structural_calibration":STRUCTURAL_CAL,"growth_horizon":GROWTH_HORIZON,"summary":summary.to_dict(orient="records"),"price_audit_rules":PRICE_AUDIT_RULES,"force_price_override":FORCE_PRICE_OVERRIDE,"sector_summary":sector_summary.to_dict(orient="records"),"hot_rank":hot_rank.to_dict(orient="records"),"outlier_rank":outlier_rank.to_dict(orient="records")}
+    export={"version":"V20.4 Sector Model Rebuild","updated_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"purpose":"Rebuild valuation intervals for memory cycle stocks and AI automation stocks using sector-specific models.","valuation_results":df.to_dict(orient="records"),"cid_summary":cid_summary.to_dict(orient="records"),"components":component_df.to_dict(orient="records"),"structural_calibration":STRUCTURAL_CAL,"growth_horizon":GROWTH_HORIZON,"summary":summary.to_dict(orient="records"),"price_audit_rules":PRICE_AUDIT_RULES,"force_price_override":FORCE_PRICE_OVERRIDE,"sector_summary":sector_summary.to_dict(orient="records"),"hot_rank":hot_rank.to_dict(orient="records"),"outlier_rank":outlier_rank.to_dict(orient="records")}
     st.code(json.dumps(export,ensure_ascii=False,indent=2),language="json")
