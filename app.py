@@ -10,10 +10,10 @@ try:
 except Exception:
     yf = None
 
-st.set_page_config(page_title="智策企業估值實驗室 V20", page_icon="🏛️", layout="wide")
+st.set_page_config(page_title="智策企業估值實驗室 V20.1", page_icon="🏛️", layout="wide")
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("V20｜雙軌估值正式版：現況價值 × 未來價值 × 類股總覽")
-st.info("本版以類股分類呈現個股估值區間，保留現況合理價，新增未來合理價與市場情緒，方便快速閱讀與找出價格失真公司。")
+st.subheader("V20.1｜估值狀態 × 市場情緒分離版")
+st.info("本版將估值狀態與市場情緒分離，避免台積電這類低於合理價的公司被誤判為偏冷；同時新增類股成熟度中心。")
 
 BENCHMARK = [
     # AI Infrastructure
@@ -212,6 +212,19 @@ FUTURE_MULTIPLIER = {
     "Telecom Infrastructure": 1.00,
 }
 
+CID_MATURITY = {
+    "金融特許權": {"成熟度": "A級", "判讀": "暫時封版", "處理": "維持現況估值引擎"},
+    "電信基礎建設": {"成熟度": "A級", "判讀": "暫時封版", "處理": "維持現況估值引擎"},
+    "航運循環": {"成熟度": "A級", "判讀": "暫時封版", "處理": "維持現況估值引擎"},
+    "AI自動化": {"成熟度": "B級", "判讀": "觀察", "處理": "先不大幅調整"},
+    "AI伺服器平台": {"成熟度": "B級", "判讀": "觀察", "處理": "保留未來價值引擎"},
+    "散熱解決方案": {"成熟度": "B級", "判讀": "觀察", "處理": "保留未來價值引擎"},
+    "AI平台": {"成熟度": "C級", "判讀": "持續優化", "處理": "檢查AI成長模型"},
+    "AI基礎建設": {"成熟度": "C級", "判讀": "持續優化", "處理": "檢查AI高成長模型"},
+    "高階材料": {"成熟度": "C級", "判讀": "持續優化", "處理": "建議拆分AI高階材料"},
+    "記憶體循環": {"成熟度": "D級", "判讀": "重新建模", "處理": "改用景氣循環/PB模型"},
+}
+
 def future_value_multiplier(r):
     base = FUTURE_MULTIPLIER.get(r["CID"], 1.0)
     growth_quality = max(0, min(35, normalized_growth_rate(r) * 100)) / 100
@@ -229,18 +242,36 @@ def price_position(current_price, current_fair, future_fair):
         return "現況～未來合理區"
     return "高於未來價值"
 
-def market_sentiment(premium):
+def valuation_level(premium):
+    """估值狀態：只判斷現價相對合理價是否高低估。"""
     if premium is None:
         return "無資料"
-    if premium < 0.85:
-        return "偏冷"
+    if premium < 0.80:
+        return "嚴重低估"
+    if premium < 1.20:
+        return "合理區間"
+    if premium < 1.80:
+        return "偏高估"
+    if premium < 3.00:
+        return "高估"
+    return "極度高估"
+
+def market_sentiment_v201(premium, implied_growth, cid):
+    """市場情緒：獨立判斷市場是否正在交易未來成長或景氣循環。"""
+    if premium is None:
+        return "無資料"
+    if cid == "Memory Cycle" and premium >= 1.5:
+        return "景氣復甦預期"
+    ig = 0 if implied_growth is None else implied_growth
+    if premium < 0.85 and ig < 15:
+        return "保守"
     if premium < 1.20:
         return "中性"
-    if premium < 1.80:
+    if premium < 1.80 or ig < 30:
         return "樂觀"
-    if premium < 3.00:
+    if premium < 3.00 or ig < 55:
         return "高度樂觀"
-    return "過熱"
+    return "狂熱"
 
 def deviation_rate(price, fair):
     if fair and fair > 0:
@@ -412,14 +443,15 @@ for i,item in enumerate(BENCHMARK, start=1):
     status_zh = STATUS_ZH.get(stat, stat)
     engine_type = ENGINE_MAP.get(item["CID"], "現況估值引擎")
     position = price_position(price, fair, future_fair)
-    sentiment = market_sentiment(fef)
+    valuation_status_new = valuation_level(fef)
+    sentiment = market_sentiment_v201(fef, implied_g, item["CID"])
     deviation = deviation_rate(price, fair)
     future_deviation = deviation_rate(price, future_fair)
     cal = STRUCTURAL_CAL[item["CID"]]
     rows.append({"公司":item["公司"],"代號":item["代號"],"產業定位":cid_zh,"CID":item["CID"],"Stage":item["Stage"],"現價":price,
                  "現況保守價":bear,"現況合理價":fair,"現況樂觀價":bull,"現況偏離%":gap,"估值狀態":status_zh,
                  "未來倍率":future_mult,"未來保守價":future_bear,"未來合理價":future_fair,"未來樂觀價":future_bull,"未來偏離%":future_gap,
-                 "現價位置":position,"市場情緒":sentiment,"使用引擎":engine_type,
+                 "現價位置":position,"估值狀態V20.1":valuation_status_new,"市場情緒":sentiment,"使用引擎":engine_type,
                  "市場溢價倍數":fef,"歷史成長率%":historical_g,"市場隱含成長%":implied_g,"隱含成長狀態":implied_status,
                  "Bear":bear,"Fair Value":fair,"Bull":bull,"Gap%":gap,"Status":stat,
                  "Premium":fef,"Historical Growth%":historical_g,"Implied Growth%":implied_g,"Implied Growth Status":implied_status,
@@ -473,10 +505,10 @@ summary=pd.DataFrame([
     {"項目":"C級CID數","結果":int((cid_summary["CID成熟度"].str.startswith("C級")).sum())},
 ])
 
-st.sidebar.header("V20 雙軌估值控制台")
-page=st.sidebar.radio("功能",["類股估值總覽","類股熱度排行榜","異常值排行榜","雙軌估值","市場情緒儀表板","個股明細","模型中心","原始Benchmark","Export JSON"])
+st.sidebar.header("V20.1 控制台")
+page=st.sidebar.radio("功能",["類股估值總覽","類股成熟度中心","類股熱度排行榜","異常值排行榜","雙軌估值","市場情緒儀表板","個股明細","模型中心","原始Benchmark","Export JSON"])
 selected=st.sidebar.selectbox("選擇公司",df["公司"].tolist())
-st.sidebar.divider(); st.sidebar.metric("樣本公司",len(df)); st.sidebar.metric("Intrinsic Fair",int((df["Status"]=="Fair Zone").sum())); st.sidebar.metric("Expected Fair",int((df["Expected Status"]=="Fair Zone").sum())); st.sidebar.metric("平均溢價",round(df["市場溢價倍數"].mean(),2)); st.sidebar.metric("過熱公司",int((df["市場情緒"]=="過熱").sum()))
+st.sidebar.divider(); st.sidebar.metric("樣本公司",len(df)); st.sidebar.metric("Intrinsic Fair",int((df["Status"]=="Fair Zone").sum())); st.sidebar.metric("Expected Fair",int((df["Expected Status"]=="Fair Zone").sum())); st.sidebar.metric("平均溢價",round(df["市場溢價倍數"].mean(),2)); st.sidebar.metric("極度高估",int((df["估值狀態V20.1"]=="極度高估").sum()))
 
 if page=="類股估值總覽":
     st.header("一、類股估值總覽")
@@ -486,9 +518,22 @@ if page=="類股估值總覽":
         avg_premium = round(sdf["市場溢價倍數"].mean(), 2)
         st.subheader(f"{sector}｜平均溢價 {avg_premium}")
         st.dataframe(
-            sdf[["公司","代號","現價","現況保守價","現況合理價","現況樂觀價","未來合理價","現價位置","市場情緒","使用引擎"]],
+            sdf[["公司","代號","現價","現況保守價","現況合理價","現況樂觀價","未來合理價","估值狀態V20.1","市場情緒","現價位置","使用引擎"]],
             use_container_width=True
         )
+
+elif page=="類股成熟度中心":
+    st.header("二、類股成熟度中心")
+    st.write("A級暫時封版；B級觀察；C級持續優化；D級重新建模。")
+    maturity_df = pd.DataFrame([
+        {"產業定位": k, **v} for k, v in CID_MATURITY.items()
+    ])
+    st.dataframe(maturity_df, use_container_width=True)
+    st.subheader("需優先研究類股")
+    st.dataframe(
+        maturity_df[maturity_df["成熟度"].isin(["C級","D級"])],
+        use_container_width=True
+    )
 
 elif page=="類股熱度排行榜":
     st.header("二、類股熱度排行榜")
@@ -500,7 +545,7 @@ elif page=="異常值排行榜":
     st.header("三、異常值排行榜")
     st.write("列出目前價格偏離現況合理價最多的公司，作為後續模型修正與研究重點。")
     st.dataframe(
-        outlier_rank[["排名","公司","代號","產業定位","現價","現況合理價","未來合理價","現況偏離%","未來偏離%","市場情緒","使用引擎"]].head(15),
+        outlier_rank[["排名","公司","代號","產業定位","現價","現況合理價","未來合理價","現況偏離%","未來偏離%","估值狀態V20.1","市場情緒","使用引擎"]].head(15),
         use_container_width=True
     )
     st.bar_chart(outlier_rank.head(15).set_index("公司")["偏離絕對值"])
@@ -518,7 +563,11 @@ elif page=="市場情緒儀表板":
     st.header("五、市場情緒儀表板")
     st.write("用市場溢價倍數與現價位置判讀市場情緒。")
     sentiment_table = df.groupby(["產業定位","市場情緒"]).size().reset_index(name="公司數")
+    valuation_table = df.groupby(["產業定位","估值狀態V20.1"]).size().reset_index(name="公司數")
+    st.subheader("市場情緒分布")
     st.dataframe(sentiment_table, use_container_width=True)
+    st.subheader("估值狀態分布")
+    st.dataframe(valuation_table, use_container_width=True)
     st.subheader("類股摘要")
     st.dataframe(sector_summary, use_container_width=True)
 
@@ -530,11 +579,11 @@ elif page=="個股明細":
     c1.metric("現價",f"{row['現價']:,.2f}")
     c2.metric("現況合理價",f"{row['現況合理價']:,.2f}",f"{row['現況偏離%']}%")
     c3.metric("未來合理價",f"{row['未來合理價']:,.2f}",f"{row['未來偏離%']}%")
-    c4.metric("市場情緒",row["市場情緒"])
+    c4.metric("估值狀態",row["估值狀態V20.1"])
     st.dataframe(pd.DataFrame([
         {"項目":"產業定位","內容":row["產業定位"]},
         {"項目":"使用引擎","內容":row["使用引擎"]},
-        {"項目":"現價位置","內容":row["現價位置"]},
+        {"項目":"現價位置","內容":row["現價位置"]},{"項目":"估值狀態","內容":row["估值狀態V20.1"]},{"項目":"市場情緒","內容":row["市場情緒"]},
         {"項目":"市場溢價倍數","內容":row["市場溢價倍數"]},
         {"項目":"歷史成長率%","內容":row["歷史成長率%"]},
         {"項目":"市場隱含成長%","內容":row["市場隱含成長%"]},
@@ -567,5 +616,5 @@ elif page=="原始Benchmark":
 
 elif page=="Export JSON":
     st.header("九、Export JSON")
-    export={"version":"V20 Dual Track Valuation System","updated_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"purpose":"Group stocks by sector and display current value, future value, market price, sentiment, and outliers.","valuation_results":df.to_dict(orient="records"),"cid_summary":cid_summary.to_dict(orient="records"),"components":component_df.to_dict(orient="records"),"structural_calibration":STRUCTURAL_CAL,"growth_horizon":GROWTH_HORIZON,"summary":summary.to_dict(orient="records"),"sector_summary":sector_summary.to_dict(orient="records"),"hot_rank":hot_rank.to_dict(orient="records"),"outlier_rank":outlier_rank.to_dict(orient="records")}
+    export={"version":"V20.1 Valuation Status and Sentiment Split","updated_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"purpose":"Separate valuation status from market sentiment and add CID maturity center.","valuation_results":df.to_dict(orient="records"),"cid_summary":cid_summary.to_dict(orient="records"),"components":component_df.to_dict(orient="records"),"structural_calibration":STRUCTURAL_CAL,"growth_horizon":GROWTH_HORIZON,"summary":summary.to_dict(orient="records"),"sector_summary":sector_summary.to_dict(orient="records"),"hot_rank":hot_rank.to_dict(orient="records"),"outlier_rank":outlier_rank.to_dict(orient="records")}
     st.code(json.dumps(export,ensure_ascii=False,indent=2),language="json")
