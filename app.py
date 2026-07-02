@@ -10,10 +10,10 @@ try:
 except Exception:
     yf = None
 
-st.set_page_config(page_title="Enterprise Valuation Lab V15 Benchmark 30", page_icon="🏛️", layout="wide")
+st.set_page_config(page_title="Enterprise Valuation Lab V16.0 GHE", page_icon="🏛️", layout="wide")
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("V15 Benchmark 30｜擴大樣本估值區間實測版")
-st.info("本版重點：先擴大樣本數，更新最新股價與財務資料，跑出 Bear / Fair / Bull 區間與 CID Gap 分布；暫不新增 Premium、暫不做 Forecast。")
+st.subheader("V16.0｜Growth Horizon Engine 未來成長年限引擎")
+st.info("本版保留 V15 Intrinsic Fair Value，新增 Growth Horizon Engine：依 CID 的市場預期年限，產生 Expected Fair Value。不是再調倍率，而是測試市場是否正在折現未來數年成長。")
 
 BENCHMARK = [
     # AI Infrastructure
@@ -92,6 +92,45 @@ WEIGHTS = {
     "Shipping Cycle":{"Cycle PE":0.30,"EV/EBITDA":0.30,"Asset Value":0.30,"Dividend":0.10},
     "Telecom Infrastructure":{"DCF":0.25,"FCFE":0.15,"EBO":0.20,"Dividend":0.40},
 }
+
+
+# ============================================================
+# V16.0 Growth Horizon Engine
+# 市場不是只看TTM，而是依CID折現不同年限的未來成長。
+# ============================================================
+
+GROWTH_HORIZON = {
+    "Financial Franchise": {"Years": 2, "Cap": 1.15, "Confidence": "High", "Mode": "Stable cash-flow"},
+    "Telecom Infrastructure": {"Years": 2, "Cap": 1.20, "Confidence": "High", "Mode": "Dividend stability"},
+    "Shipping Cycle": {"Years": 2, "Cap": 1.35, "Confidence": "Medium", "Mode": "Cycle earnings"},
+    "AI Server Platform": {"Years": 3, "Cap": 1.60, "Confidence": "Medium", "Mode": "AI server growth"},
+    "Thermal Solution": {"Years": 3, "Cap": 1.75, "Confidence": "Medium", "Mode": "Thermal growth"},
+    "AI Platform": {"Years": 4, "Cap": 1.90, "Confidence": "Medium", "Mode": "AI edge/platform"},
+    "AI Infrastructure": {"Years": 5, "Cap": 2.20, "Confidence": "Medium", "Mode": "AI compute infrastructure"},
+    "Advanced Materials": {"Years": 5, "Cap": 2.50, "Confidence": "Low", "Mode": "AI material upgrade cycle"},
+    "Intelligent Automation": {"Years": 6, "Cap": 2.80, "Confidence": "Low", "Mode": "AI robotics option value"},
+    "Memory Cycle": {"Years": 4, "Cap": 3.00, "Confidence": "Low", "Mode": "Memory cycle forward pricing"},
+}
+
+def normalized_growth_rate(r):
+    """
+    Forward Growth Proxy：
+    40% EPS Growth + 30% Revenue CAGR + 20% ROIC品質 + 10% FCF品質
+    """
+    eps_g = max(-10, min(60, r["EPS_Growth"])) / 100
+    rev_g = max(-10, min(50, r["Revenue_CAGR"])) / 100
+    roic_quality = max(0, min(40, r["ROIC"] - 8)) / 100
+    fcf_quality = max(0, min(25, r["FCF_Margin"])) / 100
+    g = eps_g * 0.40 + rev_g * 0.30 + roic_quality * 0.20 + fcf_quality * 0.10
+    return max(-0.05, min(0.35, g))
+
+def growth_horizon_multiplier(r):
+    cfg = GROWTH_HORIZON[r["CID"]]
+    g = normalized_growth_rate(r)
+    years = cfg["Years"]
+    raw = (1 + g) ** years
+    capped = min(raw, cfg["Cap"])
+    return round(capped, 3), round(g * 100, 1), years, cfg["Cap"], cfg["Confidence"], cfg["Mode"]
 
 def safe_num(x):
     try:
@@ -240,13 +279,26 @@ for i,item in enumerate(BENCHMARK, start=1):
     r = {**item, **fin, "現價":price}
     bear, fair, bull, comps = valuation(r)
     gap, stat = gap_status(price, fair)
+    ghe_mult, forward_g, horizon_years, horizon_cap, ghe_conf, ghe_mode = growth_horizon_multiplier(r)
+    exp_bear = round(bear * ghe_mult, 2)
+    exp_fair = round(fair * ghe_mult, 2)
+    exp_bull = round(bull * ghe_mult, 2)
+    exp_gap, exp_stat = gap_status(price, exp_fair)
+    fef = round(price / fair, 3) if fair and fair > 0 else None
     cal = STRUCTURAL_CAL[item["CID"]]
-    rows.append({"公司":item["公司"],"代號":item["代號"],"CID":item["CID"],"Stage":item["Stage"],"現價":price,"Bear":bear,"Fair Value":fair,"Bull":bull,"Gap%":gap,"Status":stat,"EPS":r["EPS"],"BVPS":r["BVPS"],"ROE":r["ROE"],"ROIC":r["ROIC"],"FCF_Margin":r["FCF_Margin"],"Revenue_CAGR":r["Revenue_CAGR"],"EPS_Growth":r["EPS_Growth"],"Dividend":r["Dividend"],"Data Completeness":meta["Data Completeness"],"Price Source":meta["Price Source"],"Financial Source":meta["Financial Source"],"Calibration Confidence":cal["Confidence"],"Calibration Status":cal["Status"],"Notes":"；".join(meta["Notes"])})
+    rows.append({"公司":item["公司"],"代號":item["代號"],"CID":item["CID"],"Stage":item["Stage"],"現價":price,
+                 "Bear":bear,"Fair Value":fair,"Bull":bull,"Gap%":gap,"Status":stat,
+                 "GHE Multiplier":ghe_mult,"Forward Growth Proxy%":forward_g,"Horizon Years":horizon_years,"Horizon Cap":horizon_cap,
+                 "Expected Bear":exp_bear,"Expected Fair":exp_fair,"Expected Bull":exp_bull,"Expected Gap%":exp_gap,"Expected Status":exp_stat,
+                 "Market FEF":fef,"GHE Confidence":ghe_conf,"GHE Mode":ghe_mode,
+                 "EPS":r["EPS"],"BVPS":r["BVPS"],"ROE":r["ROE"],"ROIC":r["ROIC"],"FCF_Margin":r["FCF_Margin"],"Revenue_CAGR":r["Revenue_CAGR"],"EPS_Growth":r["EPS_Growth"],"Dividend":r["Dividend"],
+                 "Data Completeness":meta["Data Completeness"],"Price Source":meta["Price Source"],"Financial Source":meta["Financial Source"],
+                 "Calibration Confidence":cal["Confidence"],"Calibration Status":cal["Status"],"Notes":"；".join(meta["Notes"])})
     for k,v in comps.items(): comp_rows.append({"公司":item["公司"],"CID":item["CID"],"模型":k,"模型值":round(v,2),"是否使用":"Yes" if k in WEIGHTS[item["CID"]] else "No","權重":WEIGHTS[item["CID"]].get(k,0)})
 progress.empty()
 
 df=pd.DataFrame(rows); component_df=pd.DataFrame(comp_rows)
-cid_summary=df.groupby("CID").agg(公司數=("公司","count"),平均Gap=("Gap%","mean"),中位數Gap=("Gap%","median"),平均絕對Gap=("Gap%",lambda x:x.abs().mean()),Gap標準差=("Gap%","std"),FairZone數=("Status",lambda x:int((x=="Fair Zone").sum())),平均資料完整度=("Data Completeness","mean")).reset_index().round(1)
+cid_summary=df.groupby("CID").agg(公司數=("公司","count"),平均Gap=("Gap%","mean"),中位數Gap=("Gap%","median"),平均絕對Gap=("Gap%",lambda x:x.abs().mean()),Expected平均Gap=("Expected Gap%","mean"),Expected平均絕對Gap=("Expected Gap%",lambda x:x.abs().mean()),FEF中位數=("Market FEF","median"),GHE倍率中位數=("GHE Multiplier","median"),Gap標準差=("Gap%","std"),FairZone數=("Status",lambda x:int((x=="Fair Zone").sum())),ExpectedFairZone數=("Expected Status",lambda x:int((x=="Fair Zone").sum())),平均資料完整度=("Data Completeness","mean")).reset_index().round(2)
 def cid_grade(row):
     if row["公司數"] < 3: return "待補樣本"
     if row["平均絕對Gap"] <= 20 and row["Gap標準差"] <= 25: return "A級：可暫時凍結"
@@ -256,27 +308,39 @@ cid_summary["CID成熟度"] = cid_summary.apply(cid_grade, axis=1)
 summary=pd.DataFrame([
     {"項目":"樣本公司數","結果":len(df)},
     {"項目":"CID數","結果":df["CID"].nunique()},
-    {"項目":"Fair Zone公司數","結果":int((df["Status"]=="Fair Zone").sum())},
-    {"項目":"平均絕對Gap","結果":f"{round(df['Gap%'].abs().mean(),1)}%"},
+    {"項目":"Intrinsic Fair Zone公司數","結果":int((df["Status"]=="Fair Zone").sum())},
+    {"項目":"Expected Fair Zone公司數","結果":int((df["Expected Status"]=="Fair Zone").sum())},
+    {"項目":"Intrinsic平均絕對Gap","結果":f"{round(df['Gap%'].abs().mean(),1)}%"},
+    {"項目":"Expected平均絕對Gap","結果":f"{round(df['Expected Gap%'].abs().mean(),1)}%"},
     {"項目":"平均資料完整度","結果":f"{round(df['Data Completeness'].mean(),1)}%"},
     {"項目":"C級CID數","結果":int((cid_summary["CID成熟度"].str.startswith("C級")).sum())},
 ])
 
-st.sidebar.header("V15 Benchmark 30 控制台")
-page=st.sidebar.radio("功能",["Benchmark Overview","Valuation Range","CID Gap Analysis","CID Maturity","Financial Data","Company Detail","Model Components","Structural Calibration","Export JSON"])
+st.sidebar.header("V16.0 GHE 控制台")
+page=st.sidebar.radio("功能",["V16 Overview","Dual Valuation","Growth Horizon Dashboard","CID Gap Analysis","CID Maturity","Financial Data","Company Detail","Model Components","Structural Calibration","Export JSON"])
 selected=st.sidebar.selectbox("選擇公司",df["公司"].tolist())
-st.sidebar.divider(); st.sidebar.metric("樣本公司",len(df)); st.sidebar.metric("Fair Zone",int((df["Status"]=="Fair Zone").sum())); st.sidebar.metric("平均絕對Gap",f"{round(df['Gap%'].abs().mean(),1)}%")
+st.sidebar.divider(); st.sidebar.metric("樣本公司",len(df)); st.sidebar.metric("Intrinsic Fair",int((df["Status"]=="Fair Zone").sum())); st.sidebar.metric("Expected Fair",int((df["Expected Status"]=="Fair Zone").sum())); st.sidebar.metric("Expected平均Gap",f"{round(df['Expected Gap%'].abs().mean(),1)}%")
 
-if page=="Benchmark Overview":
-    st.header("一、Benchmark Overview")
-    st.write("本版先擴大樣本，不改模型，讓實測結果告訴我們哪些CID可以封版、哪些需要研究。")
+if page=="V16 Overview":
+    st.header("一、V16 Overview")
+    st.write("V16保留Intrinsic估值，新增Growth Horizon Engine，測試市場是否正在折現不同CID的未來成長年限。")
     st.dataframe(summary,use_container_width=True)
-    st.subheader("Benchmark 30 總表")
-    st.dataframe(df[["公司","代號","CID","現價","Bear","Fair Value","Bull","Gap%","Status","Data Completeness","Price Source","Financial Source"]],use_container_width=True)
-elif page=="Valuation Range":
-    st.header("二、Valuation Range")
-    st.dataframe(df[["公司","CID","現價","Bear","Fair Value","Bull","Gap%","Status"]],use_container_width=True)
-    st.bar_chart(df.set_index("公司")[["Bear","Fair Value","Bull","現價"]])
+    st.subheader("V16 雙軌估值總表")
+    st.dataframe(df[["公司","代號","CID","現價","Fair Value","Gap%","Status","GHE Multiplier","Expected Fair","Expected Gap%","Expected Status","Market FEF","Data Completeness","Price Source","Financial Source"]],use_container_width=True)
+elif page=="Dual Valuation":
+    st.header("二、Dual Valuation")
+    st.dataframe(df[["公司","CID","現價","Bear","Fair Value","Bull","Gap%","Status","Expected Bear","Expected Fair","Expected Bull","Expected Gap%","Expected Status"]],use_container_width=True)
+    st.bar_chart(df.set_index("公司")[["Fair Value","Expected Fair","現價"]])
+elif page=="Growth Horizon Dashboard":
+    st.header("三、Growth Horizon Dashboard")
+    st.write("各CID的Growth Horizon年限、GHE倍率與市場FEF比較。")
+    ghe_table = pd.DataFrame([{"CID":cid, **vals} for cid, vals in GROWTH_HORIZON.items()])
+    st.subheader("GHE設定表")
+    st.dataframe(ghe_table, use_container_width=True)
+    st.subheader("CID實測FEF與GHE倍率")
+    st.dataframe(cid_summary[["CID","公司數","FEF中位數","GHE倍率中位數","平均絕對Gap","Expected平均絕對Gap","FairZone數","ExpectedFairZone數"]], use_container_width=True)
+    st.bar_chart(cid_summary.set_index("CID")[["FEF中位數","GHE倍率中位數"]])
+
 elif page=="CID Gap Analysis":
     st.header("三、CID Gap Analysis")
     st.write("用CID平均Gap與標準差判斷：問題是個股還是整個類股。")
@@ -292,8 +356,8 @@ elif page=="Financial Data":
 elif page=="Company Detail":
     st.header("六、Company Detail")
     row=df[df["公司"]==selected].iloc[0]; comps=component_df[component_df["公司"]==selected]
-    c1,c2,c3,c4=st.columns(4); c1.metric("現價",f"{row['現價']:,.2f}"); c2.metric("Fair Value",f"{row['Fair Value']:,.2f}",f"{row['Gap%']}%"); c3.metric("區間",f"{row['Bear']:,.2f} ~ {row['Bull']:,.2f}"); c4.metric("Status",row["Status"])
-    st.dataframe(pd.DataFrame([{"項目":"CID","內容":row["CID"]},{"項目":"Stage","內容":row["Stage"]},{"項目":"Calibration Confidence","內容":row["Calibration Confidence"]},{"項目":"Calibration Status","內容":row["Calibration Status"]},{"項目":"Data Completeness","內容":row["Data Completeness"]},{"項目":"Price Source","內容":row["Price Source"]},{"項目":"Financial Source","內容":row["Financial Source"]},{"項目":"Notes","內容":row["Notes"]}]),use_container_width=True)
+    c1,c2,c3,c4=st.columns(4); c1.metric("現價",f"{row['現價']:,.2f}"); c2.metric("Intrinsic Fair",f"{row['Fair Value']:,.2f}",f"{row['Gap%']}%"); c3.metric("Expected Fair",f"{row['Expected Fair']:,.2f}",f"{row['Expected Gap%']}%"); c4.metric("GHE倍率",row["GHE Multiplier"])
+    st.dataframe(pd.DataFrame([{"項目":"CID","內容":row["CID"]},{"項目":"Stage","內容":row["Stage"]},{"項目":"Calibration Confidence","內容":row["Calibration Confidence"]},{"項目":"Calibration Status","內容":row["Calibration Status"]},{"項目":"Growth Horizon Years","內容":row["Horizon Years"]},{"項目":"Forward Growth Proxy%","內容":row["Forward Growth Proxy%"]},{"項目":"GHE Mode","內容":row["GHE Mode"]},{"項目":"Data Completeness","內容":row["Data Completeness"]},{"項目":"Price Source","內容":row["Price Source"]},{"項目":"Financial Source","內容":row["Financial Source"]},{"項目":"Notes","內容":row["Notes"]}]),use_container_width=True)
     st.subheader("使用模型"); used=comps[comps["是否使用"]=="Yes"]; st.dataframe(used,use_container_width=True); st.bar_chart(used.set_index("模型")["模型值"])
 elif page=="Model Components":
     st.header("七、Model Components"); st.dataframe(component_df,use_container_width=True)
@@ -302,5 +366,5 @@ elif page=="Structural Calibration":
     st.dataframe(pd.DataFrame([{"CID":cid,**vals} for cid,vals in STRUCTURAL_CAL.items()]),use_container_width=True)
 elif page=="Export JSON":
     st.header("九、Export JSON")
-    export={"version":"V15 Benchmark 30 Expanded Sample","updated_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"purpose":"Expand sample size before further calibration or forecast.","valuation_results":df.to_dict(orient="records"),"cid_summary":cid_summary.to_dict(orient="records"),"components":component_df.to_dict(orient="records"),"structural_calibration":STRUCTURAL_CAL,"summary":summary.to_dict(orient="records")}
+    export={"version":"V16.0 Growth Horizon Engine","updated_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"purpose":"Keep V15 intrinsic valuation and add Growth Horizon Engine to estimate market expected fair value.","valuation_results":df.to_dict(orient="records"),"cid_summary":cid_summary.to_dict(orient="records"),"components":component_df.to_dict(orient="records"),"structural_calibration":STRUCTURAL_CAL,"growth_horizon":GROWTH_HORIZON,"summary":summary.to_dict(orient="records")}
     st.code(json.dumps(export,ensure_ascii=False,indent=2),language="json")
