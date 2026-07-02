@@ -10,10 +10,10 @@ try:
 except Exception:
     yf = None
 
-st.set_page_config(page_title="智策企業估值實驗室 V20.4", page_icon="🏛️", layout="wide")
+st.set_page_config(page_title="智策企業估值實驗室 V20.5", page_icon="🏛️", layout="wide")
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("V20.4｜記憶體循環 × AI自動化模型重建版")
-st.info("本版重建記憶體與AI自動化估值區間：記憶體改用PB景氣循環模型；上銀、所羅門、和椿改用AI自動化未來選擇權模型。")
+st.subheader("V20.5｜手動股價覆核 × 記憶體/AI自動化區間上修版")
+st.info("本版新增手動股價覆核面板，可直接覆蓋記憶體、上銀、所羅門現價；同時上修記憶體PB景氣模型與AI自動化未來選擇權模型。")
 
 BENCHMARK = [
     # AI Infrastructure
@@ -241,11 +241,27 @@ PRICE_AUDIT_RULES = {
 
 # 連線價格若出現10倍錯誤，先以人工覆核價格保護模型。
 # 後續若改接 TWSE/TPEX 官方資料源，可移除此覆核表。
-FORCE_PRICE_OVERRIDE = {
-    "2408.TW": {"覆核價格": 40.70, "覆核原因": "記憶體連線價疑似10倍錯誤，改用人工覆核價"},
-    "2344.TW": {"覆核價格": 18.35, "覆核原因": "記憶體連線價疑似10倍錯誤，改用人工覆核價"},
-    "2337.TW": {"覆核價格": 14.55, "覆核原因": "記憶體連線價疑似10倍錯誤，改用人工覆核價"},
+FORCE_PRICE_OVERRIDE_DEFAULT = {
+    "2408.TW": {"覆核價格": 40.70, "覆核原因": "記憶體人工覆核價，可於側邊欄調整"},
+    "2344.TW": {"覆核價格": 18.35, "覆核原因": "記憶體人工覆核價，可於側邊欄調整"},
+    "2337.TW": {"覆核價格": 14.55, "覆核原因": "記憶體人工覆核價，可於側邊欄調整"},
+    "2049.TW": {"覆核價格": 352.00, "覆核原因": "AI自動化人工覆核價，可於側邊欄調整"},
+    "2359.TW": {"覆核價格": 146.50, "覆核原因": "AI自動化人工覆核價，可於側邊欄調整"},
 }
+
+st.sidebar.subheader("手動股價覆核")
+st.sidebar.caption("若連線價錯誤，可在此直接調整。")
+FORCE_PRICE_OVERRIDE = {}
+for _sym, _cfg in FORCE_PRICE_OVERRIDE_DEFAULT.items():
+    _new_price = st.sidebar.number_input(
+        f"{_sym} 覆核現價",
+        min_value=0.0,
+        value=float(_cfg["覆核價格"]),
+        step=0.05,
+        format="%.2f",
+        key=f"manual_price_{_sym}",
+    )
+    FORCE_PRICE_OVERRIDE[_sym] = {"覆核價格": _new_price, "覆核原因": _cfg["覆核原因"]}
 
 def audit_and_fix_price(symbol, price):
     rule = PRICE_AUDIT_RULES.get(symbol)
@@ -293,23 +309,25 @@ def audit_and_fix_price(symbol, price):
 
 def memory_cycle_pb_model(r):
     """
-    記憶體循環不再用單年EPS/DCF。
-    改用BVPS × PB Cycle，避免景氣谷底EPS造成估值崩潰或暴衝。
+    V20.5：記憶體循環改為較完整的PB景氣模型。
+    不看單年EPS，改看BVPS、產業健康度、下一輪循環預期。
     """
     bvps = max(0, r["BVPS"])
     health = r.get("Industry_Health", 75)
 
-    # 景氣位置：保守0.6PB、合理0.9~1.1PB、樂觀1.4~1.8PB
-    fair_pb = 0.90 + max(0, min(25, health - 70)) / 100
-    bear_pb = max(0.45, fair_pb * 0.65)
-    bull_pb = fair_pb * 1.65
+    # 記憶體在景氣復甦初期常會先交易PB擴張，因此上修PB區間。
+    fair_pb = 1.35 + max(0, min(30, health - 70)) / 100
+    bear_pb = max(0.80, fair_pb * 0.75)
+    bull_pb = fair_pb * 1.85
 
     bear = round(bvps * bear_pb, 2)
     fair = round(bvps * fair_pb, 2)
     bull = round(bvps * bull_pb, 2)
 
-    future_fair = round(bvps * min(fair_pb * 1.55, 1.85), 2)
-    return bear, fair, bull, future_fair, "PB景氣循環模型"
+    # 未來合理價用復甦高峰PB，不再壓在1.85倍。
+    future_pb = min(fair_pb * 2.10, 3.20)
+    future_fair = round(bvps * future_pb, 2)
+    return bear, fair, bull, future_fair, "V20.5 PB景氣循環上修模型"
 
 def automation_future_option_model(r, current_bear, current_fair, current_bull):
     """
@@ -324,20 +342,20 @@ def automation_future_option_model(r, current_bear, current_fair, current_bull):
 
     quality = 1 + (growth * 0.008) + (roic * 0.006) + (fcf * 0.004)
 
-    if r["代號"] == "2049.TW":      # 上銀：機器人與精密傳動，給較高但不無限放大
-        pe_base = 34
+    if r["代號"] == "2049.TW":      # 上銀：精密傳動 + 機器人復甦
+        pe_base = 62
     elif r["代號"] == "2359.TW":    # 所羅門：AI視覺/機器人題材
-        pe_base = 42
+        pe_base = 72
     elif r["代號"] == "6215.TWO":   # 和椿：中小型自動化
-        pe_base = 28
+        pe_base = 38
     else:
-        pe_base = 30
+        pe_base = 45
 
     option_value = eps * pe_base * quality
-    future_fair = round(max(current_fair * 1.15, option_value), 2)
-    future_bear = round(future_fair * 0.70, 2)
-    future_bull = round(future_fair * 1.45, 2)
-    return future_bear, future_fair, future_bull, "AI自動化未來選擇權模型"
+    future_fair = round(max(current_fair * 1.60, option_value), 2)
+    future_bear = round(future_fair * 0.65, 2)
+    future_bull = round(future_fair * 1.60, 2)
+    return future_bear, future_fair, future_bull, "V20.5 AI自動化未來選擇權上修模型"
 
 def future_value_multiplier(r):
     base = FUTURE_MULTIPLIER.get(r["CID"], 1.0)
@@ -646,15 +664,15 @@ if page=="類股估值總覽":
         avg_premium = round(sdf["市場溢價倍數"].mean(), 2)
         st.subheader(f"{sector}｜平均溢價 {avg_premium}")
         st.dataframe(
-            sdf[["公司","代號","現價","現況保守價","現況合理價","現況樂觀價","未來合理價","估值狀態V20.1","市場情緒","現價位置","使用引擎","類股模型註記"]],
+            sdf[["公司","代號","原始股價","現價","股價審查","現況保守價","現況合理價","現況樂觀價","未來合理價","估值狀態V20.1","市場情緒","現價位置","使用引擎","類股模型註記"]],
             use_container_width=True
         )
 
 elif page=="記憶體與自動化重估":
     st.header("二、記憶體與AI自動化重估")
-    st.write("針對目前最容易失真的兩組：記憶體循環、AI自動化，使用專用模型重新估值。")
+    st.write("針對目前最容易失真的兩組：記憶體循環、AI自動化，使用上修後專用模型重新估值，並顯示原始股價與手動覆核價。")
     focus = df[df["CID"].isin(["Memory Cycle", "Intelligent Automation"])][
-        ["公司","代號","產業定位","現價","現況保守價","現況合理價","現況樂觀價","未來合理價","估值狀態V20.1","市場情緒","類股模型註記","股價審查","股價審查備註"]
+        ["公司","代號","產業定位","原始股價","現價","股價審查","現況保守價","現況合理價","現況樂觀價","未來合理價","估值狀態V20.1","市場情緒","類股模型註記","股價審查備註"]
     ]
     st.dataframe(focus, use_container_width=True)
     st.bar_chart(focus.set_index("公司")[["現價","現況合理價","未來合理價"]])
@@ -771,5 +789,5 @@ elif page=="原始Benchmark":
 
 elif page=="Export JSON":
     st.header("九、Export JSON")
-    export={"version":"V20.4 Sector Model Rebuild","updated_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"purpose":"Rebuild valuation intervals for memory cycle stocks and AI automation stocks using sector-specific models.","valuation_results":df.to_dict(orient="records"),"cid_summary":cid_summary.to_dict(orient="records"),"components":component_df.to_dict(orient="records"),"structural_calibration":STRUCTURAL_CAL,"growth_horizon":GROWTH_HORIZON,"summary":summary.to_dict(orient="records"),"price_audit_rules":PRICE_AUDIT_RULES,"force_price_override":FORCE_PRICE_OVERRIDE,"sector_summary":sector_summary.to_dict(orient="records"),"hot_rank":hot_rank.to_dict(orient="records"),"outlier_rank":outlier_rank.to_dict(orient="records")}
+    export={"version":"V20.5 Manual Price Panel and Sector Model Upgrade","updated_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"purpose":"Add manual price override panel and upgrade valuation ranges for memory cycle and AI automation stocks.","valuation_results":df.to_dict(orient="records"),"cid_summary":cid_summary.to_dict(orient="records"),"components":component_df.to_dict(orient="records"),"structural_calibration":STRUCTURAL_CAL,"growth_horizon":GROWTH_HORIZON,"summary":summary.to_dict(orient="records"),"price_audit_rules":PRICE_AUDIT_RULES,"force_price_override":FORCE_PRICE_OVERRIDE,"sector_summary":sector_summary.to_dict(orient="records"),"hot_rank":hot_rank.to_dict(orient="records"),"outlier_rank":outlier_rank.to_dict(orient="records")}
     st.code(json.dumps(export,ensure_ascii=False,indent=2),language="json")
