@@ -10,10 +10,10 @@ try:
 except Exception:
     yf = None
 
-st.set_page_config(page_title="Enterprise Valuation Lab V17 Alpha MIGE", page_icon="🏛️", layout="wide")
+st.set_page_config(page_title="智策企業估值實驗室 V20", page_icon="🏛️", layout="wide")
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("V17 Alpha｜Market Implied Growth Engine 市場隱含成長實驗版")
-st.info("本版不改估值核心，只在Benchmark 30上增加 Premium、Historical Growth、Implied Growth，用實測結果判斷市場到底隱含多少成長預期。")
+st.subheader("V20｜雙軌估值正式版：現況價值 × 未來價值 × 類股總覽")
+st.info("本版以類股分類呈現個股估值區間，保留現況合理價，新增未來合理價與市場情緒，方便快速閱讀與找出價格失真公司。")
 
 BENCHMARK = [
     # AI Infrastructure
@@ -161,18 +161,91 @@ def implied_growth_status(implied_growth):
     return "Extreme"
 
 
-# V17.1 Growth Input Rebuild
-def growth_score_v171(r):
-    rev3 = max(-20, min(60, r["Revenue_CAGR"]))
-    rev5 = rev3  # current dataset only has one CAGR source
-    roic = max(0, min(60, r["ROIC"]))
-    fcf = max(-10, min(30, r["FCF_Margin"]))
-    return round(rev5*0.40 + rev3*0.30 + roic*0.20 + fcf*0.10, 1)
+# ============================================================
+# V20 中文化與雙軌估值輔助函式
+# ============================================================
 
-def implied_growth_v171(score, premium):
+CID_ZH = {
+    "AI Infrastructure": "AI基礎建設",
+    "AI Platform": "AI平台",
+    "AI Server Platform": "AI伺服器平台",
+    "Advanced Materials": "高階材料",
+    "Thermal Solution": "散熱解決方案",
+    "Intelligent Automation": "AI自動化",
+    "Memory Cycle": "記憶體循環",
+    "Financial Franchise": "金融特許權",
+    "Shipping Cycle": "航運循環",
+    "Telecom Infrastructure": "電信基礎建設",
+}
+
+STATUS_ZH = {
+    "Fair Zone": "合理區",
+    "Mild Divergence": "輕度偏離",
+    "Strong Divergence": "明顯偏離",
+    "Extreme Divergence": "極端偏離",
+    "N/A": "無資料",
+}
+
+ENGINE_MAP = {
+    "AI Infrastructure": "未來價值引擎",
+    "AI Platform": "未來價值引擎",
+    "AI Server Platform": "未來價值引擎",
+    "Advanced Materials": "未來價值引擎",
+    "Thermal Solution": "未來價值引擎",
+    "Intelligent Automation": "現況估值引擎",
+    "Memory Cycle": "景氣循環引擎",
+    "Financial Franchise": "現況估值引擎",
+    "Shipping Cycle": "現況估值引擎",
+    "Telecom Infrastructure": "現況估值引擎",
+}
+
+FUTURE_MULTIPLIER = {
+    "AI Infrastructure": 1.45,
+    "AI Platform": 1.35,
+    "AI Server Platform": 1.25,
+    "Advanced Materials": 1.55,
+    "Thermal Solution": 1.35,
+    "Intelligent Automation": 1.15,
+    "Memory Cycle": 2.20,
+    "Financial Franchise": 1.00,
+    "Shipping Cycle": 1.05,
+    "Telecom Infrastructure": 1.00,
+}
+
+def future_value_multiplier(r):
+    base = FUTURE_MULTIPLIER.get(r["CID"], 1.0)
+    growth_quality = max(0, min(35, normalized_growth_rate(r) * 100)) / 100
+    if ENGINE_MAP.get(r["CID"]) == "現況估值引擎":
+        return round(base, 3)
+    if ENGINE_MAP.get(r["CID"]) == "景氣循環引擎":
+        cycle_boost = 1 + max(0, (r["Industry_Health"] - 70)) / 100
+        return round(min(base * cycle_boost, 3.0), 3)
+    return round(min(base * (1 + growth_quality * 0.35), 2.8), 3)
+
+def price_position(current_price, current_fair, future_fair):
+    if current_price <= current_fair:
+        return "低於現況價值"
+    if current_price <= future_fair:
+        return "現況～未來合理區"
+    return "高於未來價值"
+
+def market_sentiment(premium):
     if premium is None:
-        return None
-    return round(score * premium, 1)
+        return "無資料"
+    if premium < 0.85:
+        return "偏冷"
+    if premium < 1.20:
+        return "中性"
+    if premium < 1.80:
+        return "樂觀"
+    if premium < 3.00:
+        return "高度樂觀"
+    return "過熱"
+
+def deviation_rate(price, fair):
+    if fair and fair > 0:
+        return round((price / fair - 1) * 100, 1)
+    return None
 
 def safe_num(x):
     try:
@@ -328,13 +401,28 @@ for i,item in enumerate(BENCHMARK, start=1):
     exp_gap, exp_stat = gap_status(price, exp_fair)
     fef = round(price / fair, 3) if fair and fair > 0 else None
     historical_g = historical_growth_alpha(r)
-    growth_score = growth_score_v171(r)
-    implied_g = implied_growth_v171(growth_score, fef)
+    implied_g = implied_growth_alpha(historical_g, fef)
     implied_status = implied_growth_status(implied_g)
+    future_mult = future_value_multiplier(r)
+    future_bear = round(bear * future_mult, 2)
+    future_fair = round(fair * future_mult, 2)
+    future_bull = round(bull * future_mult, 2)
+    future_gap, future_status = gap_status(price, future_fair)
+    cid_zh = CID_ZH.get(item["CID"], item["CID"])
+    status_zh = STATUS_ZH.get(stat, stat)
+    engine_type = ENGINE_MAP.get(item["CID"], "現況估值引擎")
+    position = price_position(price, fair, future_fair)
+    sentiment = market_sentiment(fef)
+    deviation = deviation_rate(price, fair)
+    future_deviation = deviation_rate(price, future_fair)
     cal = STRUCTURAL_CAL[item["CID"]]
-    rows.append({"公司":item["公司"],"代號":item["代號"],"CID":item["CID"],"Stage":item["Stage"],"現價":price,
+    rows.append({"公司":item["公司"],"代號":item["代號"],"產業定位":cid_zh,"CID":item["CID"],"Stage":item["Stage"],"現價":price,
+                 "現況保守價":bear,"現況合理價":fair,"現況樂觀價":bull,"現況偏離%":gap,"估值狀態":status_zh,
+                 "未來倍率":future_mult,"未來保守價":future_bear,"未來合理價":future_fair,"未來樂觀價":future_bull,"未來偏離%":future_gap,
+                 "現價位置":position,"市場情緒":sentiment,"使用引擎":engine_type,
+                 "市場溢價倍數":fef,"歷史成長率%":historical_g,"市場隱含成長%":implied_g,"隱含成長狀態":implied_status,
                  "Bear":bear,"Fair Value":fair,"Bull":bull,"Gap%":gap,"Status":stat,
-                 "Premium":fef,"Historical Growth%":historical_g,"Growth Score":growth_score,"Implied Growth%":implied_g,"Implied Growth Status":implied_status,
+                 "Premium":fef,"Historical Growth%":historical_g,"Implied Growth%":implied_g,"Implied Growth Status":implied_status,
                  "GHE Multiplier":ghe_mult,"Forward Growth Proxy%":forward_g,"Horizon Years":horizon_years,"Horizon Cap":horizon_cap,
                  "Expected Bear":exp_bear,"Expected Fair":exp_fair,"Expected Bull":exp_bull,"Expected Gap%":exp_gap,"Expected Status":exp_stat,
                  "Market FEF":fef,"GHE Confidence":ghe_conf,"GHE Mode":ghe_mode,
@@ -345,13 +433,32 @@ for i,item in enumerate(BENCHMARK, start=1):
 progress.empty()
 
 df=pd.DataFrame(rows); component_df=pd.DataFrame(comp_rows)
-cid_summary=df.groupby("CID").agg(公司數=("公司","count"),平均Gap=("Gap%","mean"),中位數Gap=("Gap%","median"),平均絕對Gap=("Gap%",lambda x:x.abs().mean()),Expected平均Gap=("Expected Gap%","mean"),Expected平均絕對Gap=("Expected Gap%",lambda x:x.abs().mean()),FEF中位數=("Market FEF","median"),Premium平均=("Premium","mean"),HistoricalGrowth平均=("Historical Growth%","mean"),GrowthScore平均=("Growth Score","mean"),ImpliedGrowth平均=("Implied Growth%","mean"),ImpliedGrowth中位數=("Implied Growth%","median"),GHE倍率中位數=("GHE Multiplier","median"),Gap標準差=("Gap%","std"),FairZone數=("Status",lambda x:int((x=="Fair Zone").sum())),ExpectedFairZone數=("Expected Status",lambda x:int((x=="Fair Zone").sum())),平均資料完整度=("Data Completeness","mean")).reset_index().round(2)
+cid_summary=df.groupby("CID").agg(公司數=("公司","count"),平均Gap=("Gap%","mean"),中位數Gap=("Gap%","median"),平均絕對Gap=("Gap%",lambda x:x.abs().mean()),Expected平均Gap=("Expected Gap%","mean"),Expected平均絕對Gap=("Expected Gap%",lambda x:x.abs().mean()),FEF中位數=("Market FEF","median"),Premium平均=("Premium","mean"),HistoricalGrowth平均=("Historical Growth%","mean"),ImpliedGrowth平均=("Implied Growth%","mean"),ImpliedGrowth中位數=("Implied Growth%","median"),GHE倍率中位數=("GHE Multiplier","median"),Gap標準差=("Gap%","std"),FairZone數=("Status",lambda x:int((x=="Fair Zone").sum())),ExpectedFairZone數=("Expected Status",lambda x:int((x=="Fair Zone").sum())),平均資料完整度=("Data Completeness","mean")).reset_index().round(2)
 def cid_grade(row):
     if row["公司數"] < 3: return "待補樣本"
     if row["平均絕對Gap"] <= 20 and row["Gap標準差"] <= 25: return "A級：可暫時凍結"
     if row["平均絕對Gap"] <= 40: return "B級：觀察"
     return "C級：需研究"
 cid_summary["CID成熟度"] = cid_summary.apply(cid_grade, axis=1)
+
+sector_summary = df.groupby(["產業定位","使用引擎"]).agg(
+    公司數=("公司","count"),
+    平均現價=("現價","mean"),
+    平均現況合理價=("現況合理價","mean"),
+    平均未來合理價=("未來合理價","mean"),
+    平均市場溢價=("市場溢價倍數","mean"),
+    平均現況偏離=("現況偏離%","mean"),
+    平均未來偏離=("未來偏離%","mean"),
+).reset_index().round(2)
+
+hot_rank = sector_summary.sort_values("平均市場溢價", ascending=False).reset_index(drop=True)
+hot_rank.insert(0, "排名", hot_rank.index + 1)
+
+outlier_rank = df.copy()
+outlier_rank["偏離絕對值"] = outlier_rank["現況偏離%"].abs()
+outlier_rank = outlier_rank.sort_values("偏離絕對值", ascending=False).reset_index(drop=True)
+outlier_rank.insert(0, "排名", outlier_rank.index + 1)
+
 summary=pd.DataFrame([
     {"項目":"樣本公司數","結果":len(df)},
     {"項目":"CID數","結果":df["CID"].nunique()},
@@ -366,68 +473,99 @@ summary=pd.DataFrame([
     {"項目":"C級CID數","結果":int((cid_summary["CID成熟度"].str.startswith("C級")).sum())},
 ])
 
-st.sidebar.header("V17 Alpha MIGE 控制台")
-page=st.sidebar.radio("功能",["V17 Alpha Overview","MIGE Dashboard","CID Implied Growth","Dual Valuation","Growth Horizon Dashboard","CID Gap Analysis","CID Maturity","Financial Data","Company Detail","Model Components","Structural Calibration","Export JSON"])
+st.sidebar.header("V20 雙軌估值控制台")
+page=st.sidebar.radio("功能",["類股估值總覽","類股熱度排行榜","異常值排行榜","雙軌估值","市場情緒儀表板","個股明細","模型中心","原始Benchmark","Export JSON"])
 selected=st.sidebar.selectbox("選擇公司",df["公司"].tolist())
-st.sidebar.divider(); st.sidebar.metric("樣本公司",len(df)); st.sidebar.metric("Intrinsic Fair",int((df["Status"]=="Fair Zone").sum())); st.sidebar.metric("Expected Fair",int((df["Expected Status"]=="Fair Zone").sum())); st.sidebar.metric("Avg Premium",round(df["Premium"].mean(),2)); st.sidebar.metric("Avg Implied",f"{round(df['Implied Growth%'].mean(),1)}%")
+st.sidebar.divider(); st.sidebar.metric("樣本公司",len(df)); st.sidebar.metric("Intrinsic Fair",int((df["Status"]=="Fair Zone").sum())); st.sidebar.metric("Expected Fair",int((df["Expected Status"]=="Fair Zone").sum())); st.sidebar.metric("平均溢價",round(df["市場溢價倍數"].mean(),2)); st.sidebar.metric("過熱公司",int((df["市場情緒"]=="過熱").sum()))
 
-if page=="V17 Alpha Overview":
-    st.header("一、V17 Alpha Overview")
-    st.write("V17 Alpha 先不做財務預測，只用現價 / Fair Value 反推市場隱含成長分布。")
-    st.dataframe(summary,use_container_width=True)
-    st.subheader("V17 Alpha 總表")
-    st.dataframe(df[["公司","代號","CID","現價","Fair Value","Gap%","Status","Premium","Historical Growth%","Implied Growth%","Implied Growth Status","Data Completeness","Price Source","Financial Source"]],use_container_width=True)
-elif page=="MIGE Dashboard":
-    st.header("二、MIGE Dashboard")
-    st.write("Premium = 現價 / Fair Value；Historical Growth = 50% Revenue CAGR + 50% EPS Growth；Implied Growth = Historical Growth × Premium。")
-    show = df[["公司","CID","現價","Fair Value","Premium","Revenue_CAGR","EPS_Growth","Historical Growth%","Implied Growth%","Implied Growth Status"]].sort_values("Implied Growth%", ascending=False)
-    st.dataframe(show, use_container_width=True)
-    st.bar_chart(show.set_index("公司")[["Historical Growth%","Implied Growth%"]])
+if page=="類股估值總覽":
+    st.header("一、類股估值總覽")
+    st.write("依類股分類呈現：現價、現況合理價、未來合理價與市場情緒。")
+    for sector in df["產業定位"].drop_duplicates():
+        sdf = df[df["產業定位"] == sector]
+        avg_premium = round(sdf["市場溢價倍數"].mean(), 2)
+        st.subheader(f"{sector}｜平均溢價 {avg_premium}")
+        st.dataframe(
+            sdf[["公司","代號","現價","現況保守價","現況合理價","現況樂觀價","未來合理價","現價位置","市場情緒","使用引擎"]],
+            use_container_width=True
+        )
 
-elif page=="CID Implied Growth":
-    st.header("三、CID Implied Growth")
-    st.write("用CID層級觀察：哪些類股的市場隱含成長明顯高於歷史成長。")
-    st.dataframe(cid_summary[["CID","公司數","Premium平均","FEF中位數","HistoricalGrowth平均","ImpliedGrowth平均","ImpliedGrowth中位數","平均絕對Gap","CID成熟度"]], use_container_width=True)
-    st.bar_chart(cid_summary.set_index("CID")[["HistoricalGrowth平均","ImpliedGrowth平均"]])
+elif page=="類股熱度排行榜":
+    st.header("二、類股熱度排行榜")
+    st.write("以平均市場溢價倍數觀察市場目前追捧的類股。")
+    st.dataframe(hot_rank[["排名","產業定位","使用引擎","公司數","平均市場溢價","平均現況偏離","平均未來偏離"]], use_container_width=True)
+    st.bar_chart(hot_rank.set_index("產業定位")["平均市場溢價"])
 
-elif page=="Dual Valuation":
-    st.header("二、Dual Valuation")
-    st.dataframe(df[["公司","CID","現價","Bear","Fair Value","Bull","Gap%","Status","Expected Bear","Expected Fair","Expected Bull","Expected Gap%","Expected Status"]],use_container_width=True)
-    st.bar_chart(df.set_index("公司")[["Fair Value","Expected Fair","現價"]])
-elif page=="Growth Horizon Dashboard":
-    st.header("三、Growth Horizon Dashboard")
-    st.write("各CID的Growth Horizon年限、GHE倍率與市場FEF比較。")
-    ghe_table = pd.DataFrame([{"CID":cid, **vals} for cid, vals in GROWTH_HORIZON.items()])
-    st.subheader("GHE設定表")
-    st.dataframe(ghe_table, use_container_width=True)
-    st.subheader("CID實測FEF與GHE倍率")
-    st.dataframe(cid_summary[["CID","公司數","FEF中位數","GHE倍率中位數","平均絕對Gap","Expected平均絕對Gap","FairZone數","ExpectedFairZone數"]], use_container_width=True)
-    st.bar_chart(cid_summary.set_index("CID")[["FEF中位數","GHE倍率中位數"]])
+elif page=="異常值排行榜":
+    st.header("三、異常值排行榜")
+    st.write("列出目前價格偏離現況合理價最多的公司，作為後續模型修正與研究重點。")
+    st.dataframe(
+        outlier_rank[["排名","公司","代號","產業定位","現價","現況合理價","未來合理價","現況偏離%","未來偏離%","市場情緒","使用引擎"]].head(15),
+        use_container_width=True
+    )
+    st.bar_chart(outlier_rank.head(15).set_index("公司")["偏離絕對值"])
 
-elif page=="CID Gap Analysis":
-    st.header("三、CID Gap Analysis")
-    st.write("用CID平均Gap與標準差判斷：問題是個股還是整個類股。")
-    st.dataframe(cid_summary,use_container_width=True)
-    st.bar_chart(cid_summary.set_index("CID")[["平均絕對Gap","Gap標準差"]])
-elif page=="CID Maturity":
-    st.header("四、CID Maturity")
-    st.write("A級可暫時凍結；B級觀察；C級才進一步研究修正。")
-    st.dataframe(cid_summary[["CID","公司數","平均絕對Gap","Gap標準差","FairZone數","CID成熟度"]],use_container_width=True)
-elif page=="Financial Data":
-    st.header("五、Financial Data")
-    st.dataframe(df[["公司","EPS","BVPS","ROE","ROIC","FCF_Margin","Revenue_CAGR","EPS_Growth","Dividend","Data Completeness","Notes"]],use_container_width=True)
-elif page=="Company Detail":
-    st.header("六、Company Detail")
-    row=df[df["公司"]==selected].iloc[0]; comps=component_df[component_df["公司"]==selected]
-    c1,c2,c3,c4=st.columns(4); c1.metric("現價",f"{row['現價']:,.2f}"); c2.metric("Intrinsic Fair",f"{row['Fair Value']:,.2f}",f"{row['Gap%']}%"); c3.metric("Expected Fair",f"{row['Expected Fair']:,.2f}",f"{row['Expected Gap%']}%"); c4.metric("GHE倍率",row["GHE Multiplier"])
-    st.dataframe(pd.DataFrame([{"項目":"CID","內容":row["CID"]},{"項目":"Stage","內容":row["Stage"]},{"項目":"Calibration Confidence","內容":row["Calibration Confidence"]},{"項目":"Calibration Status","內容":row["Calibration Status"]},{"項目":"Growth Horizon Years","內容":row["Horizon Years"]},{"項目":"Forward Growth Proxy%","內容":row["Forward Growth Proxy%"]},{"項目":"GHE Mode","內容":row["GHE Mode"]},{"項目":"Premium","內容":row["Premium"]},{"項目":"Historical Growth%","內容":row["Historical Growth%"]},{"項目":"Implied Growth%","內容":row["Implied Growth%"]},{"項目":"Implied Growth Status","內容":row["Implied Growth Status"]},{"項目":"Data Completeness","內容":row["Data Completeness"]},{"項目":"Price Source","內容":row["Price Source"]},{"項目":"Financial Source","內容":row["Financial Source"]},{"項目":"Notes","內容":row["Notes"]}]),use_container_width=True)
-    st.subheader("使用模型"); used=comps[comps["是否使用"]=="Yes"]; st.dataframe(used,use_container_width=True); st.bar_chart(used.set_index("模型")["模型值"])
-elif page=="Model Components":
-    st.header("七、Model Components"); st.dataframe(component_df,use_container_width=True)
-elif page=="Structural Calibration":
-    st.header("八、Structural Calibration")
-    st.dataframe(pd.DataFrame([{"CID":cid,**vals} for cid,vals in STRUCTURAL_CAL.items()]),use_container_width=True)
+elif page=="雙軌估值":
+    st.header("四、雙軌估值")
+    st.write("同時比較市場現價、現況價值與未來價值。")
+    st.dataframe(
+        df[["公司","產業定位","現價","現況保守價","現況合理價","現況樂觀價","未來保守價","未來合理價","未來樂觀價","現價位置"]],
+        use_container_width=True
+    )
+    st.bar_chart(df.set_index("公司")[["現況合理價","未來合理價","現價"]])
+
+elif page=="市場情緒儀表板":
+    st.header("五、市場情緒儀表板")
+    st.write("用市場溢價倍數與現價位置判讀市場情緒。")
+    sentiment_table = df.groupby(["產業定位","市場情緒"]).size().reset_index(name="公司數")
+    st.dataframe(sentiment_table, use_container_width=True)
+    st.subheader("類股摘要")
+    st.dataframe(sector_summary, use_container_width=True)
+
+elif page=="個股明細":
+    st.header("六、個股明細")
+    row=df[df["公司"]==selected].iloc[0]
+    comps=component_df[component_df["公司"]==selected]
+    c1,c2,c3,c4=st.columns(4)
+    c1.metric("現價",f"{row['現價']:,.2f}")
+    c2.metric("現況合理價",f"{row['現況合理價']:,.2f}",f"{row['現況偏離%']}%")
+    c3.metric("未來合理價",f"{row['未來合理價']:,.2f}",f"{row['未來偏離%']}%")
+    c4.metric("市場情緒",row["市場情緒"])
+    st.dataframe(pd.DataFrame([
+        {"項目":"產業定位","內容":row["產業定位"]},
+        {"項目":"使用引擎","內容":row["使用引擎"]},
+        {"項目":"現價位置","內容":row["現價位置"]},
+        {"項目":"市場溢價倍數","內容":row["市場溢價倍數"]},
+        {"項目":"歷史成長率%","內容":row["歷史成長率%"]},
+        {"項目":"市場隱含成長%","內容":row["市場隱含成長%"]},
+        {"項目":"資料完整度","內容":row["Data Completeness"]},
+        {"項目":"股價來源","內容":row["Price Source"]},
+        {"項目":"財務來源","內容":row["Financial Source"]},
+        {"項目":"備註","內容":row["Notes"]},
+    ]), use_container_width=True)
+    st.subheader("使用模型")
+    used=comps[comps["是否使用"]=="Yes"]
+    st.dataframe(used,use_container_width=True)
+    st.bar_chart(used.set_index("模型")["模型值"])
+
+elif page=="模型中心":
+    st.header("七、模型中心")
+    st.write("V20 將模型分成三種：現況估值、未來價值、景氣循環。")
+    model_df = pd.DataFrame([
+        {"模型":"現況估值引擎","適用類股":"金融特許權、電信基礎建設、航運循環、AI自動化","目的":"回答公司目前值多少"},
+        {"模型":"未來價值引擎","適用類股":"AI基礎建設、AI平台、AI伺服器平台、高階材料、散熱解決方案","目的":"回答未來成長實現後值多少"},
+        {"模型":"景氣循環引擎","適用類股":"記憶體循環","目的":"避免單年EPS造成估值崩潰"},
+    ])
+    st.dataframe(model_df, use_container_width=True)
+    st.subheader("結構校正資料")
+    st.dataframe(pd.DataFrame([{"CID":cid,"中文類股":CID_ZH.get(cid,cid),**vals} for cid,vals in STRUCTURAL_CAL.items()]),use_container_width=True)
+
+elif page=="原始Benchmark":
+    st.header("八、原始Benchmark")
+    st.write("保留原本 Benchmark 與 MIGE 欄位，方便回溯驗證。")
+    st.dataframe(df, use_container_width=True)
+
 elif page=="Export JSON":
     st.header("九、Export JSON")
-    export={"version":"V17 Alpha Market Implied Growth Engine","updated_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"purpose":"Add Market Implied Growth Alpha metrics on top of Benchmark 30 without changing valuation model.","valuation_results":df.to_dict(orient="records"),"cid_summary":cid_summary.to_dict(orient="records"),"components":component_df.to_dict(orient="records"),"structural_calibration":STRUCTURAL_CAL,"growth_horizon":GROWTH_HORIZON,"summary":summary.to_dict(orient="records")}
+    export={"version":"V20 Dual Track Valuation System","updated_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"purpose":"Group stocks by sector and display current value, future value, market price, sentiment, and outliers.","valuation_results":df.to_dict(orient="records"),"cid_summary":cid_summary.to_dict(orient="records"),"components":component_df.to_dict(orient="records"),"structural_calibration":STRUCTURAL_CAL,"growth_horizon":GROWTH_HORIZON,"summary":summary.to_dict(orient="records"),"sector_summary":sector_summary.to_dict(orient="records"),"hot_rank":hot_rank.to_dict(orient="records"),"outlier_rank":outlier_rank.to_dict(orient="records")}
     st.code(json.dumps(export,ensure_ascii=False,indent=2),language="json")
