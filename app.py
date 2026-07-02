@@ -10,10 +10,10 @@ try:
 except Exception:
     yf = None
 
-st.set_page_config(page_title="智策企業估值實驗室 V20.1", page_icon="🏛️", layout="wide")
+st.set_page_config(page_title="智策企業估值實驗室 V20.2", page_icon="🏛️", layout="wide")
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("V20.1｜估值狀態 × 市場情緒分離版")
-st.info("本版將估值狀態與市場情緒分離，避免台積電這類低於合理價的公司被誤判為偏冷；同時新增類股成熟度中心。")
+st.subheader("V20.2｜股價資料審查版：記憶體／上銀／所羅門重檢")
+st.info("本版新增股價審查層，針對記憶體族群、上銀、所羅門進行價格合理區間檢查；若疑似10倍錯誤，會自動修正並標記。")
 
 BENCHMARK = [
     # AI Infrastructure
@@ -225,6 +225,53 @@ CID_MATURITY = {
     "記憶體循環": {"成熟度": "D級", "判讀": "重新建模", "處理": "改用景氣循環/PB模型"},
 }
 
+# ============================================================
+# V20.2 股價資料審查層
+# 目的：先排除資料源/倍率錯誤，再討論估值模型。
+# 注意：區間是審查用，不是估值判斷。
+# ============================================================
+
+PRICE_AUDIT_RULES = {
+    "2408.TW": {"審查群組": "記憶體", "最低合理價": 10, "最高合理價": 120, "備註": "南亞科"},
+    "2344.TW": {"審查群組": "記憶體", "最低合理價": 5, "最高合理價": 80, "備註": "華邦電"},
+    "2337.TW": {"審查群組": "記憶體", "最低合理價": 5, "最高合理價": 80, "備註": "旺宏"},
+    "2049.TW": {"審查群組": "AI自動化", "最低合理價": 80, "最高合理價": 800, "備註": "上銀"},
+    "2359.TW": {"審查群組": "AI自動化", "最低合理價": 20, "最高合理價": 400, "備註": "所羅門"},
+}
+
+def audit_and_fix_price(symbol, price):
+    rule = PRICE_AUDIT_RULES.get(symbol)
+    if not rule:
+        return price, "未列入審查", "", False
+
+    low = rule["最低合理價"]
+    high = rule["最高合理價"]
+    group = rule["審查群組"]
+
+    if price is None:
+        return price, "缺少股價", f"{group}｜無法取得股價", False
+
+    fixed_price = price
+    auto_fixed = False
+    note = ""
+
+    # 常見錯誤：14.55 被顯示成 145.5，183.5 被顯示成 18.35 的反向也保留人工標記。
+    if price > high and low <= price / 10 <= high:
+        fixed_price = round(price / 10, 2)
+        auto_fixed = True
+        note = f"{group}｜疑似10倍股價錯誤，已由 {price} 修正為 {fixed_price}"
+    elif price < low and low <= price * 10 <= high:
+        fixed_price = round(price * 10, 2)
+        auto_fixed = True
+        note = f"{group}｜疑似0.1倍股價錯誤，已由 {price} 修正為 {fixed_price}"
+    elif low <= price <= high:
+        note = f"{group}｜股價通過審查"
+    else:
+        note = f"{group}｜股價超出審查區間，請人工確認：{price}"
+
+    status = "已自動修正" if auto_fixed else ("通過" if low <= fixed_price <= high else "需人工確認")
+    return fixed_price, status, note, auto_fixed
+
 def future_value_multiplier(r):
     base = FUTURE_MULTIPLIER.get(r["CID"], 1.0)
     growth_quality = max(0, min(35, normalized_growth_rate(r) * 100)) / 100
@@ -421,7 +468,8 @@ rows=[]; comp_rows=[]
 progress = st.sidebar.empty()
 for i,item in enumerate(BENCHMARK, start=1):
     progress.caption(f"載入資料 {i}/{len(BENCHMARK)}：{item['公司']}")
-    price, fin, meta = fetch_market_and_financials(item["代號"], item["fallback_price"], item["fallback"])
+    raw_price, fin, meta = fetch_market_and_financials(item["代號"], item["fallback_price"], item["fallback"])
+    price, price_audit_status, price_audit_note, price_auto_fixed = audit_and_fix_price(item["代號"], raw_price)
     r = {**item, **fin, "現價":price}
     bear, fair, bull, comps = valuation(r)
     gap, stat = gap_status(price, fair)
@@ -448,7 +496,7 @@ for i,item in enumerate(BENCHMARK, start=1):
     deviation = deviation_rate(price, fair)
     future_deviation = deviation_rate(price, future_fair)
     cal = STRUCTURAL_CAL[item["CID"]]
-    rows.append({"公司":item["公司"],"代號":item["代號"],"產業定位":cid_zh,"CID":item["CID"],"Stage":item["Stage"],"現價":price,
+    rows.append({"公司":item["公司"],"代號":item["代號"],"產業定位":cid_zh,"CID":item["CID"],"Stage":item["Stage"],"現價":price,"原始股價":raw_price,"股價審查":price_audit_status,"股價審查備註":price_audit_note,"股價自動修正":price_auto_fixed,
                  "現況保守價":bear,"現況合理價":fair,"現況樂觀價":bull,"現況偏離%":gap,"估值狀態":status_zh,
                  "未來倍率":future_mult,"未來保守價":future_bear,"未來合理價":future_fair,"未來樂觀價":future_bull,"未來偏離%":future_gap,
                  "現價位置":position,"估值狀態V20.1":valuation_status_new,"市場情緒":sentiment,"使用引擎":engine_type,
@@ -506,7 +554,7 @@ summary=pd.DataFrame([
 ])
 
 st.sidebar.header("V20.1 控制台")
-page=st.sidebar.radio("功能",["類股估值總覽","類股成熟度中心","類股熱度排行榜","異常值排行榜","雙軌估值","市場情緒儀表板","個股明細","模型中心","原始Benchmark","Export JSON"])
+page=st.sidebar.radio("功能",["類股估值總覽","股價審查中心","類股成熟度中心","類股熱度排行榜","異常值排行榜","雙軌估值","市場情緒儀表板","個股明細","模型中心","原始Benchmark","Export JSON"])
 selected=st.sidebar.selectbox("選擇公司",df["公司"].tolist())
 st.sidebar.divider(); st.sidebar.metric("樣本公司",len(df)); st.sidebar.metric("Intrinsic Fair",int((df["Status"]=="Fair Zone").sum())); st.sidebar.metric("Expected Fair",int((df["Expected Status"]=="Fair Zone").sum())); st.sidebar.metric("平均溢價",round(df["市場溢價倍數"].mean(),2)); st.sidebar.metric("極度高估",int((df["估值狀態V20.1"]=="極度高估").sum()))
 
@@ -521,6 +569,23 @@ if page=="類股估值總覽":
             sdf[["公司","代號","現價","現況保守價","現況合理價","現況樂觀價","未來合理價","估值狀態V20.1","市場情緒","現價位置","使用引擎"]],
             use_container_width=True
         )
+
+elif page=="股價審查中心":
+    st.header("二、股價審查中心")
+    st.write("優先檢查記憶體族群、上銀、所羅門是否有股價倍率或資料源錯誤。")
+    audit_df = df[df["代號"].isin(list(PRICE_AUDIT_RULES.keys()))][
+        ["公司","代號","產業定位","原始股價","現價","股價審查","股價自動修正","股價審查備註","現況合理價","未來合理價","估值狀態V20.1"]
+    ].copy()
+    st.dataframe(audit_df, use_container_width=True)
+
+    st.subheader("審查規則")
+    rule_df = pd.DataFrame([
+        {"代號": k, **v} for k, v in PRICE_AUDIT_RULES.items()
+    ])
+    st.dataframe(rule_df, use_container_width=True)
+
+    st.subheader("需要人工確認")
+    st.dataframe(audit_df[audit_df["股價審查"].isin(["需人工確認","已自動修正"])], use_container_width=True)
 
 elif page=="類股成熟度中心":
     st.header("二、類股成熟度中心")
@@ -588,7 +653,7 @@ elif page=="個股明細":
         {"項目":"歷史成長率%","內容":row["歷史成長率%"]},
         {"項目":"市場隱含成長%","內容":row["市場隱含成長%"]},
         {"項目":"資料完整度","內容":row["Data Completeness"]},
-        {"項目":"股價來源","內容":row["Price Source"]},
+        {"項目":"原始股價","內容":row["原始股價"]},{"項目":"股價審查","內容":row["股價審查"]},{"項目":"股價審查備註","內容":row["股價審查備註"]},{"項目":"股價來源","內容":row["Price Source"]},
         {"項目":"財務來源","內容":row["Financial Source"]},
         {"項目":"備註","內容":row["Notes"]},
     ]), use_container_width=True)
@@ -616,5 +681,5 @@ elif page=="原始Benchmark":
 
 elif page=="Export JSON":
     st.header("九、Export JSON")
-    export={"version":"V20.1 Valuation Status and Sentiment Split","updated_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"purpose":"Separate valuation status from market sentiment and add CID maturity center.","valuation_results":df.to_dict(orient="records"),"cid_summary":cid_summary.to_dict(orient="records"),"components":component_df.to_dict(orient="records"),"structural_calibration":STRUCTURAL_CAL,"growth_horizon":GROWTH_HORIZON,"summary":summary.to_dict(orient="records"),"sector_summary":sector_summary.to_dict(orient="records"),"hot_rank":hot_rank.to_dict(orient="records"),"outlier_rank":outlier_rank.to_dict(orient="records")}
+    export={"version":"V20.2 Price Audit Layer","updated_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"purpose":"Add price audit layer for memory stocks, Hiwin, and Solomon before valuation interpretation.","valuation_results":df.to_dict(orient="records"),"cid_summary":cid_summary.to_dict(orient="records"),"components":component_df.to_dict(orient="records"),"structural_calibration":STRUCTURAL_CAL,"growth_horizon":GROWTH_HORIZON,"summary":summary.to_dict(orient="records"),"price_audit_rules":PRICE_AUDIT_RULES,"sector_summary":sector_summary.to_dict(orient="records"),"hot_rank":hot_rank.to_dict(orient="records"),"outlier_rank":outlier_rank.to_dict(orient="records")}
     st.code(json.dumps(export,ensure_ascii=False,indent=2),language="json")
