@@ -10,10 +10,10 @@ try:
 except Exception:
     yf = None
 
-st.set_page_config(page_title="智策企業估值實驗室 V20.2", page_icon="🏛️", layout="wide")
+st.set_page_config(page_title="智策企業估值實驗室 V20.3", page_icon="🏛️", layout="wide")
 st.title("🏛️ Enterprise Valuation Lab")
-st.subheader("V20.2｜股價資料審查版：記憶體／上銀／所羅門重檢")
-st.info("本版新增股價審查層，針對記憶體族群、上銀、所羅門進行價格合理區間檢查；若疑似10倍錯誤，會自動修正並標記。")
+st.subheader("V20.3｜股價人工覆核版：記憶體價格強制修正")
+st.info("本版針對記憶體族群啟用人工覆核價格，不再直接採用 yfinance 連線價；保留原始股價、修正股價與審查備註，避免10倍錯誤影響估值判讀。")
 
 BENCHMARK = [
     # AI Infrastructure
@@ -239,8 +239,23 @@ PRICE_AUDIT_RULES = {
     "2359.TW": {"審查群組": "AI自動化", "最低合理價": 20, "最高合理價": 400, "備註": "所羅門"},
 }
 
+# 連線價格若出現10倍錯誤，先以人工覆核價格保護模型。
+# 後續若改接 TWSE/TPEX 官方資料源，可移除此覆核表。
+FORCE_PRICE_OVERRIDE = {
+    "2408.TW": {"覆核價格": 40.70, "覆核原因": "記憶體連線價疑似10倍錯誤，改用人工覆核價"},
+    "2344.TW": {"覆核價格": 18.35, "覆核原因": "記憶體連線價疑似10倍錯誤，改用人工覆核價"},
+    "2337.TW": {"覆核價格": 14.55, "覆核原因": "記憶體連線價疑似10倍錯誤，改用人工覆核價"},
+}
+
 def audit_and_fix_price(symbol, price):
     rule = PRICE_AUDIT_RULES.get(symbol)
+    if symbol in FORCE_PRICE_OVERRIDE:
+        override = FORCE_PRICE_OVERRIDE[symbol]
+        fixed_price = override["覆核價格"]
+        raw = price
+        note = f'{rule["審查群組"] if rule else "人工覆核"}｜{override["覆核原因"]}；原始連線價={raw}，覆核價={fixed_price}'
+        return fixed_price, "人工覆核覆蓋", note, True
+
     if not rule:
         return price, "未列入審查", "", False
 
@@ -572,20 +587,20 @@ if page=="類股估值總覽":
 
 elif page=="股價審查中心":
     st.header("二、股價審查中心")
-    st.write("優先檢查記憶體族群、上銀、所羅門是否有股價倍率或資料源錯誤。")
+    st.write("記憶體族群已改用人工覆核價格；上銀、所羅門保留審查區間，若超出區間再標記人工確認。")
     audit_df = df[df["代號"].isin(list(PRICE_AUDIT_RULES.keys()))][
-        ["公司","代號","產業定位","原始股價","現價","股價審查","股價自動修正","股價審查備註","現況合理價","未來合理價","估值狀態V20.1"]
+        ["公司","代號","產業定位","原始股價","現價","股價審查","股價自動修正","股價審查備註","現況合理價","未來合理價","估值狀態V20.1","Price Source"]
     ].copy()
     st.dataframe(audit_df, use_container_width=True)
 
     st.subheader("審查規則")
     rule_df = pd.DataFrame([
-        {"代號": k, **v} for k, v in PRICE_AUDIT_RULES.items()
+        {"代號": k, **v, "人工覆核價格": FORCE_PRICE_OVERRIDE.get(k, {}).get("覆核價格", "")} for k, v in PRICE_AUDIT_RULES.items()
     ])
     st.dataframe(rule_df, use_container_width=True)
 
     st.subheader("需要人工確認")
-    st.dataframe(audit_df[audit_df["股價審查"].isin(["需人工確認","已自動修正"])], use_container_width=True)
+    st.dataframe(audit_df[audit_df["股價審查"].isin(["需人工確認","已自動修正","人工覆核覆蓋"])], use_container_width=True)
 
 elif page=="類股成熟度中心":
     st.header("二、類股成熟度中心")
@@ -681,5 +696,5 @@ elif page=="原始Benchmark":
 
 elif page=="Export JSON":
     st.header("九、Export JSON")
-    export={"version":"V20.2 Price Audit Layer","updated_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"purpose":"Add price audit layer for memory stocks, Hiwin, and Solomon before valuation interpretation.","valuation_results":df.to_dict(orient="records"),"cid_summary":cid_summary.to_dict(orient="records"),"components":component_df.to_dict(orient="records"),"structural_calibration":STRUCTURAL_CAL,"growth_horizon":GROWTH_HORIZON,"summary":summary.to_dict(orient="records"),"price_audit_rules":PRICE_AUDIT_RULES,"sector_summary":sector_summary.to_dict(orient="records"),"hot_rank":hot_rank.to_dict(orient="records"),"outlier_rank":outlier_rank.to_dict(orient="records")}
+    export={"version":"V20.3 Manual Price Override Layer","updated_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"purpose":"Force manual reviewed prices for memory stocks when yfinance prices show 10x errors; keep audit layer for Hiwin and Solomon.","valuation_results":df.to_dict(orient="records"),"cid_summary":cid_summary.to_dict(orient="records"),"components":component_df.to_dict(orient="records"),"structural_calibration":STRUCTURAL_CAL,"growth_horizon":GROWTH_HORIZON,"summary":summary.to_dict(orient="records"),"price_audit_rules":PRICE_AUDIT_RULES,"force_price_override":FORCE_PRICE_OVERRIDE,"sector_summary":sector_summary.to_dict(orient="records"),"hot_rank":hot_rank.to_dict(orient="records"),"outlier_rank":outlier_rank.to_dict(orient="records")}
     st.code(json.dumps(export,ensure_ascii=False,indent=2),language="json")
